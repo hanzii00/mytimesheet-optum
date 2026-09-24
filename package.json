@@ -1,0 +1,10 @@
+{
+  "name": "attendance-tracking-platform",
+  "private": true,
+  "scripts": {
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": ".venv/bin/python backend/manage.py runserver",
+    "build": "npm --prefix frontend run build",
+    "test": ".venv/bin/python backend/manage.py test attendance"
+  }
+}
