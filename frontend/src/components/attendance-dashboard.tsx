@@ -23,16 +23,29 @@ const shiftMonthKey = (monthKey: string, delta: number) => {
 const minutesToHours = (value: number) => `${Math.floor(value / 60)}h ${value % 60}m`;
 
 const USER_NAME_KEY = "attendance-portal:user-name";
+const SHIFT_START_KEY = "attendance-portal:shift-start";
+const SHIFT_END_KEY = "attendance-portal:shift-end";
 
 const formatTime = (value: string | null) =>
   value
     ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(value))
     : "—";
 
+const formatShiftTime = (value: string | null) => {
+  if (!value) return "—";
+  const [hour, minute] = value.split(":");
+  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(
+    new Date(`2026-01-01T${hour}:${minute}:00`),
+  );
+};
+
 const formatDate = (value: string) =>
   new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }).format(
     new Date(`${value}T12:00:00`),
   );
+
+const statusClass = (value: string | undefined) =>
+  value ? `status-pill ${value.toLowerCase().replaceAll(" ", "-")}` : "status-pill neutral";
 
 async function readError(response: Response) {
   try {
@@ -54,6 +67,11 @@ export default function AttendanceDashboard() {
   const [userName, setUserName] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [shiftStart, setShiftStart] = useState("09:00");
+  const [shiftEnd, setShiftEnd] = useState("18:00");
+  const [shiftDraftStart, setShiftDraftStart] = useState("09:00");
+  const [shiftDraftEnd, setShiftDraftEnd] = useState("18:00");
+  const [editingShift, setEditingShift] = useState(false);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(USER_NAME_KEY);
@@ -62,6 +80,13 @@ export default function AttendanceDashboard() {
     } else {
       setEditingName(true);
     }
+
+    const storedShiftStart = window.localStorage.getItem(SHIFT_START_KEY) ?? "09:00";
+    const storedShiftEnd = window.localStorage.getItem(SHIFT_END_KEY) ?? "18:00";
+    setShiftStart(storedShiftStart);
+    setShiftEnd(storedShiftEnd);
+    setShiftDraftStart(storedShiftStart);
+    setShiftDraftEnd(storedShiftEnd);
   }, []);
 
   const saveName = (value: string) => {
@@ -70,6 +95,14 @@ export default function AttendanceDashboard() {
     window.localStorage.setItem(USER_NAME_KEY, trimmed);
     setUserName(trimmed);
     setEditingName(false);
+  };
+
+  const saveShift = () => {
+    window.localStorage.setItem(SHIFT_START_KEY, shiftDraftStart);
+    window.localStorage.setItem(SHIFT_END_KEY, shiftDraftEnd);
+    setShiftStart(shiftDraftStart);
+    setShiftEnd(shiftDraftEnd);
+    setEditingShift(false);
   };
 
   const fetchRecords = useCallback(async (month: string) => {
@@ -109,7 +142,11 @@ export default function AttendanceDashboard() {
   const handleClock = async (action: "clock-in" | "clock-out") => {
     setBusy(action === "clock-in" ? "in" : "out");
     try {
-      const response = await fetch(`${API_URL}/${action}/`, { method: "POST" });
+      const response = await fetch(`${API_URL}/${action}/`, {
+        method: "POST",
+        headers: action === "clock-in" ? { "Content-Type": "application/json" } : undefined,
+        body: action === "clock-in" ? JSON.stringify({ shift_start: shiftStart, shift_end: shiftEnd }) : undefined,
+      });
       if (!response.ok) throw new Error(await readError(response));
       if (monthKey === currentMonthKey()) {
         await fetchRecords(monthKey);
@@ -205,6 +242,43 @@ export default function AttendanceDashboard() {
 
       {notice && <button className="notice" onClick={() => setNotice("")}>{notice}<span>×</span></button>}
 
+      <section className="shift-card">
+        <div>
+          <p className="eyebrow">ATTACHED SHIFT</p>
+          <h2>{formatShiftTime(shiftStart)} – {formatShiftTime(shiftEnd)}</h2>
+          <p>Time-in labels are based on this shift start: Early bird, Ahead of the bell, Almost late, Right on time, or Late arrival.</p>
+        </div>
+        {editingShift ? (
+          <form
+            className="shift-form"
+            onSubmit={(event) => { event.preventDefault(); saveShift(); }}
+          >
+            <label>
+              Start
+              <input type="time" value={shiftDraftStart} onChange={(event) => setShiftDraftStart(event.target.value)} required />
+            </label>
+            <label>
+              End
+              <input type="time" value={shiftDraftEnd} onChange={(event) => setShiftDraftEnd(event.target.value)} required />
+            </label>
+            <button type="submit" className="primary-button compact">Save shift</button>
+            <button
+              type="button"
+              className="secondary-button compact"
+              onClick={() => {
+                setShiftDraftStart(shiftStart);
+                setShiftDraftEnd(shiftEnd);
+                setEditingShift(false);
+              }}
+            >
+              Cancel
+            </button>
+          </form>
+        ) : (
+          <button className="secondary-button compact" onClick={() => setEditingShift(true)}>Edit shift</button>
+        )}
+      </section>
+
       <section className="time-clock">
         <div>
           <p className="eyebrow">TIME CLOCK</p>
@@ -218,6 +292,7 @@ export default function AttendanceDashboard() {
           <p className="time-clock-readout">
             <span>Time in: <strong>{formatTime(todaysRecord?.first_in ?? null)}</strong></span>
             <span>Time out: <strong>{formatTime(todaysRecord?.last_out ?? null)}</strong></span>
+            <span>Status: <strong>{todaysRecord?.time_in_status || "—"}</strong></span>
           </p>
         </div>
         <div className="time-clock-actions">
@@ -254,7 +329,9 @@ export default function AttendanceDashboard() {
           <h2>{selectedDate ? formatDate(selectedDate) : "Select a day"}</h2>
           {selectedDate ? (
             <dl className="day-detail-list">
+              <div><dt>Shift</dt><dd>{formatShiftTime(selectedRecord?.shift_start ?? null)} – {formatShiftTime(selectedRecord?.shift_end ?? null)}</dd></div>
               <div><dt>Time in</dt><dd>{formatTime(selectedRecord?.first_in ?? null)}</dd></div>
+              <div><dt>Time in label</dt><dd><span className={statusClass(selectedRecord?.time_in_status)}>{selectedRecord?.time_in_status || "No label"}</span></dd></div>
               <div><dt>Time out</dt><dd>{formatTime(selectedRecord?.last_out ?? null)}</dd></div>
               <div><dt>Hours worked</dt><dd>{minutesToHours(selectedRecord?.work_minutes ?? 0)}</dd></div>
               <div><dt>Night diff (10 PM–5 AM)</dt><dd>{minutesToHours(selectedRecord?.night_diff_minutes ?? 0)}</dd></div>
@@ -285,13 +362,15 @@ export default function AttendanceDashboard() {
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>Date</th><th>Time In</th><th>Time Out</th><th>Hours worked</th><th>Night diff</th></tr>
+                <tr><th>Date</th><th>Shift</th><th>Time In</th><th>Status</th><th>Time Out</th><th>Hours worked</th><th>Night diff</th></tr>
               </thead>
               <tbody>
                 {data.records.map((record) => (
                   <tr key={record.id}>
                     <td><strong>{formatDate(record.date)}</strong></td>
+                    <td>{formatShiftTime(record.shift_start)} – {formatShiftTime(record.shift_end)}</td>
                     <td>{formatTime(record.first_in)}</td>
+                    <td><span className={statusClass(record.time_in_status)}>{record.time_in_status || "No label"}</span></td>
                     <td>{formatTime(record.last_out)}</td>
                     <td>{minutesToHours(record.work_minutes)}</td>
                     <td>{minutesToHours(record.night_diff_minutes)}</td>

@@ -35,3 +35,25 @@ def compute_night_diff_minutes(start, end):
         day += timedelta(days=1)
 
     return int(total.total_seconds() // 60)
+
+
+def compute_time_in_status(first_in, shift_start):
+    if not first_in or not shift_start:
+        return ""
+
+    local_first_in = timezone.localtime(first_in)
+    shift_start_at = timezone.make_aware(
+        datetime.combine(local_first_in.date(), shift_start),
+        local_first_in.tzinfo,
+    )
+    minutes_before_shift = int((shift_start_at - local_first_in).total_seconds() // 60)
+
+    if minutes_before_shift >= 60:
+        return "Early bird"
+    if minutes_before_shift > 10:
+        return "Ahead of the bell"
+    if minutes_before_shift > 0:
+        return "Almost late"
+    if minutes_before_shift == 0:
+        return "Right on time"
+    return "Late arrival"

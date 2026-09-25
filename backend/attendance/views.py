@@ -12,7 +12,16 @@ from rest_framework.response import Response
 
 from .models import AttendanceRecord
 from .serializers import AttendanceRecordSerializer
-from .utils import compute_night_diff_minutes
+from .utils import compute_night_diff_minutes, compute_time_in_status
+
+
+def parse_shift_time(value, field_name):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%H:%M").time()
+    except ValueError as error:
+        raise ValueError(f"{field_name} must use HH:MM format.") from error
 
 
 @api_view(["GET"])
@@ -40,6 +49,12 @@ def records(request):
 
 @api_view(["POST"])
 def clock_in(request):
+    try:
+        shift_start = parse_shift_time(request.data.get("shift_start"), "Shift start")
+        shift_end = parse_shift_time(request.data.get("shift_end"), "Shift end")
+    except ValueError as error:
+        return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+
     open_record = AttendanceRecord.objects.filter(first_in__isnull=False, last_out__isnull=True).first()
     if open_record:
         return Response(
@@ -54,10 +69,19 @@ def clock_in(request):
 
     today = timezone.localdate()
     now = timezone.now()
-    record, created = AttendanceRecord.objects.get_or_create(date=today, defaults={"first_in": now})
+    defaults = {
+        "first_in": now,
+        "shift_start": shift_start,
+        "shift_end": shift_end,
+        "time_in_status": compute_time_in_status(now, shift_start),
+    }
+    record, created = AttendanceRecord.objects.get_or_create(date=today, defaults=defaults)
     if not created:
         record.first_in = now
-        record.save(update_fields=["first_in"])
+        record.shift_start = shift_start
+        record.shift_end = shift_end
+        record.time_in_status = compute_time_in_status(now, shift_start)
+        record.save(update_fields=["first_in", "shift_start", "shift_end", "time_in_status"])
     return Response(
         AttendanceRecordSerializer(record).data,
         status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
@@ -95,18 +119,29 @@ def export_excel(request):
     sheet = workbook.active
     sheet.title = "Attendance"
 
-    headers = ["Date", "Time In", "Time Out", "Hours Worked", "Night Diff Hours"]
+    headers = ["Date", "Shift Start", "Shift End", "Time In", "Time Out", "Time In Label", "Hours Worked", "Night Diff Hours"]
     sheet.append(headers)
     for cell in sheet[1]:
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center")
 
     for record in queryset.order_by("date"):
+        shift_start = record.shift_start.strftime("%I:%M %p") if record.shift_start else ""
+        shift_end = record.shift_end.strftime("%I:%M %p") if record.shift_end else ""
         time_in = timezone.localtime(record.first_in).strftime("%I:%M %p") if record.first_in else ""
         time_out = timezone.localtime(record.last_out).strftime("%I:%M %p") if record.last_out else ""
         hours_worked = round(record.work_minutes / 60, 2) if record.work_minutes else 0
         night_diff_hours = round(record.night_diff_minutes / 60, 2) if record.night_diff_minutes else 0
-        sheet.append([record.date.strftime("%Y-%m-%d"), time_in, time_out, hours_worked, night_diff_hours])
+        sheet.append([
+            record.date.strftime("%Y-%m-%d"),
+            shift_start,
+            shift_end,
+            time_in,
+            time_out,
+            record.time_in_status,
+            hours_worked,
+            night_diff_hours,
+        ])
 
     for index, header in enumerate(headers, start=1):
         column_letter = get_column_letter(index)

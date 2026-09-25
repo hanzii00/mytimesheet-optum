@@ -29,9 +29,17 @@ h1 { margin: 0; color: #18263c; font-size: 26px; letter-spacing: -.6px; }
 
 .notice { width: 100%; display: flex; justify-content: space-between; border: 1px solid #bfd3ff; color: #315da8; background: #eef4ff; border-radius: 8px; padding: 11px 14px; margin-bottom: 20px; border-width: 1px; }
 
+.shift-card { display: flex; align-items: center; justify-content: space-between; gap: 18px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin-bottom: 22px; box-shadow: 0 1px 3px #1b33550a; }
+.shift-card h2 { margin: 0 0 6px; color: #1d2d44; font-size: 17px; }
+.shift-card p { margin: 0; color: #8a96a7; font-size: 12px; line-height: 1.5; max-width: 560px; }
+.shift-form { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.shift-form label { display: flex; flex-direction: column; gap: 5px; color: #8a96a7; font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; }
+.shift-form input { border: 1px solid #d7deea; border-radius: 7px; padding: 8px 10px; color: #26364f; font-size: 12px; }
+.shift-form input:focus { outline: 2px solid #bcd0fb; border-color: #4f75ca; }
+
 .time-clock { display: flex; align-items: center; justify-content: space-between; gap: 20px; background: white; border: 1px solid var(--line); border-radius: 10px; padding: 22px 24px; margin-bottom: 22px; box-shadow: 0 1px 3px #1b33550a; }
 .time-clock h2 { margin: 4px 0 10px; font-size: 17px; color: #1d2d44; }
-.time-clock-readout { display: flex; gap: 22px; margin: 0; color: #68768a; font-size: 12px; }
+.time-clock-readout { display: flex; gap: 22px; flex-wrap: wrap; margin: 0; color: #68768a; font-size: 12px; }
 .time-clock-readout strong { color: #26364f; }
 .time-clock-actions { display: flex; gap: 10px; flex: 0 0 auto; }
 
@@ -53,6 +61,14 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th { padding: 12px 16px; text-align: left; color: #8995a6; background: #fafbfc; border-bottom: 1px solid var(--line); font-size: 9px; letter-spacing: .5px; white-space: nowrap; }
 td { padding: 14px 16px; color: #5d6b7e; border-bottom: 1px solid #edf0f3; white-space: nowrap; }
 td strong { color: #2f4058; }
+
+.status-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 8px; font-size: 10px; font-weight: 800; line-height: 1; }
+.status-pill.early-bird { color: #147854; background: #def8ed; }
+.status-pill.ahead-of-the-bell { color: #315da8; background: #e7f0ff; }
+.status-pill.almost-late { color: #9a6409; background: #fff3cf; }
+.status-pill.right-on-time { color: #4f46a5; background: #ecebff; }
+.status-pill.late-arrival { color: #a33a3a; background: #ffe4e4; }
+.status-pill.neutral { color: #667085; background: #eef1f5; }
 
 .empty-state { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; padding: 30px 24px; }
 .empty-state h2 { margin: 0; font-size: 15px; color: #1d2d44; }
@@ -100,6 +116,9 @@ td strong { color: #2f4058; }
 @media (max-width: 640px) {
   .tracker-header { flex-direction: column; align-items: flex-start; gap: 10px; }
   .time-clock { flex-direction: column; align-items: stretch; }
+  .shift-card { flex-direction: column; align-items: stretch; }
+  .shift-form { justify-content: stretch; }
+  .shift-form label, .shift-form button { flex: 1; }
   .time-clock-actions { justify-content: stretch; }
   .time-clock-actions button { flex: 1; }
   .panel-header { flex-direction: column; align-items: stretch; }

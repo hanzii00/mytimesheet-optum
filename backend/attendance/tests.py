@@ -33,6 +33,42 @@ class AttendanceApiTests(TestCase):
         response = self.client.post(reverse("clock-in"))
         self.assertEqual(response.status_code, 400)
 
+    def test_clock_in_attaches_shift_and_labels_almost_late(self):
+        today = timezone.localdate()
+        almost_late = timezone.make_aware(datetime.combine(today, time(8, 55)))
+
+        with mock.patch("django.utils.timezone.now", return_value=almost_late):
+            response = self.client.post(reverse("clock-in"), {"shift_start": "09:00", "shift_end": "18:00"})
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["shift_start"], "09:00:00")
+        self.assertEqual(response.data["shift_end"], "18:00:00")
+        self.assertEqual(response.data["time_in_status"], "Almost late")
+
+    def test_clock_in_labels_early_bird(self):
+        today = timezone.localdate()
+        early = timezone.make_aware(datetime.combine(today, time(7, 45)))
+
+        with mock.patch("django.utils.timezone.now", return_value=early):
+            response = self.client.post(reverse("clock-in"), {"shift_start": "09:00"})
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["time_in_status"], "Early bird")
+
+    def test_clock_in_labels_late_arrival(self):
+        today = timezone.localdate()
+        late = timezone.make_aware(datetime.combine(today, time(9, 1)))
+
+        with mock.patch("django.utils.timezone.now", return_value=late):
+            response = self.client.post(reverse("clock-in"), {"shift_start": "09:00"})
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["time_in_status"], "Late arrival")
+
+    def test_clock_in_rejects_invalid_shift_time(self):
+        response = self.client.post(reverse("clock-in"), {"shift_start": "9am"})
+        self.assertEqual(response.status_code, 400)
+
     def test_clock_out_requires_clock_in_first(self):
         response = self.client.post(reverse("clock-out"))
         self.assertEqual(response.status_code, 400)
@@ -90,6 +126,9 @@ class AttendanceApiTests(TestCase):
         today = timezone.localdate()
         AttendanceRecord.objects.create(
             date=today,
+            shift_start=time(8, 0),
+            shift_end=time(17, 0),
+            time_in_status="Right on time",
             first_in=timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.min.time())) + timedelta(hours=8),
             last_out=timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.min.time())) + timedelta(hours=17),
             work_minutes=540,
@@ -106,8 +145,12 @@ class AttendanceApiTests(TestCase):
         workbook = load_workbook(filename=__import__("io").BytesIO(response.content))
         sheet = workbook.active
         header = [cell.value for cell in sheet[1]]
-        self.assertEqual(header, ["Date", "Time In", "Time Out", "Hours Worked", "Night Diff Hours"])
+        self.assertEqual(
+            header,
+            ["Date", "Shift Start", "Shift End", "Time In", "Time Out", "Time In Label", "Hours Worked", "Night Diff Hours"],
+        )
         data_row = [cell.value for cell in sheet[2]]
         self.assertEqual(data_row[0], today.strftime("%Y-%m-%d"))
-        self.assertEqual(data_row[3], 9.0)
-        self.assertEqual(data_row[4], 1.0)
+        self.assertEqual(data_row[5], "Right on time")
+        self.assertEqual(data_row[6], 9.0)
+        self.assertEqual(data_row[7], 1.0)
