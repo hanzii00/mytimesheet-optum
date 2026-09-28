@@ -10,8 +10,8 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import AttendanceRecord
-from .serializers import AttendanceRecordSerializer
+from .models import AttendanceRecord, ShiftSetting
+from .serializers import AttendanceRecordSerializer, ShiftSettingSerializer
 from .utils import compute_night_diff_minutes, compute_time_in_status
 
 
@@ -22,6 +22,28 @@ def parse_shift_time(value, field_name):
         return datetime.strptime(value, "%H:%M").time()
     except ValueError as error:
         raise ValueError(f"{field_name} must use HH:MM format.") from error
+
+
+def get_open_record():
+    """The session that has been timed in but not yet timed out, regardless of date."""
+    return AttendanceRecord.objects.filter(first_in__isnull=False, last_out__isnull=True).order_by("-date").first()
+
+
+@api_view(["GET", "PUT"])
+def shift_setting(request):
+    setting = ShiftSetting.load()
+    if request.method == "PUT":
+        try:
+            start = parse_shift_time(request.data.get("start"), "Shift start")
+            end = parse_shift_time(request.data.get("end"), "Shift end")
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        if not start or not end:
+            return Response({"detail": "Both start and end are required."}, status=status.HTTP_400_BAD_REQUEST)
+        setting.start = start
+        setting.end = end
+        setting.save()
+    return Response(ShiftSettingSerializer(setting).data)
 
 
 @api_view(["GET"])
@@ -36,9 +58,11 @@ def records(request):
         queryset = queryset.filter(date__year=month_start.year, date__month=month_start.month)
 
     totals = queryset.aggregate(work_minutes=Sum("work_minutes"), night_diff_minutes=Sum("night_diff_minutes"))
+    open_record = get_open_record()
     return Response(
         {
             "records": AttendanceRecordSerializer(queryset, many=True).data,
+            "open_record": AttendanceRecordSerializer(open_record).data if open_record else None,
             "totals": {
                 "work_minutes": totals["work_minutes"] or 0,
                 "night_diff_minutes": totals["night_diff_minutes"] or 0,
@@ -55,7 +79,7 @@ def clock_in(request):
     except ValueError as error:
         return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
 
-    open_record = AttendanceRecord.objects.filter(first_in__isnull=False, last_out__isnull=True).first()
+    open_record = get_open_record()
     if open_record:
         return Response(
             {
@@ -66,6 +90,16 @@ def clock_in(request):
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+    setting = ShiftSetting.load()
+    if shift_start and shift_end:
+        # Remember the shift the user clocked in with so it persists across devices.
+        setting.start = shift_start
+        setting.end = shift_end
+        setting.save()
+    else:
+        shift_start = shift_start or setting.start
+        shift_end = shift_end or setting.end
 
     today = timezone.localdate()
     now = timezone.now()
@@ -92,7 +126,7 @@ def clock_in(request):
 def clock_out(request):
     # Match the currently open session rather than strictly "today's" record,
     # so overnight shifts that cross midnight are closed out correctly.
-    record = AttendanceRecord.objects.filter(first_in__isnull=False, last_out__isnull=True).order_by("-date").first()
+    record = get_open_record()
     if not record:
         return Response({"detail": "Time in before you can time out."}, status=status.HTTP_400_BAD_REQUEST)
     now = timezone.now()

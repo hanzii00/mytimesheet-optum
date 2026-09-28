@@ -1,6 +1,12 @@
 from rest_framework import serializers
 
-from .models import AttendanceRecord
+from .models import AttendanceRecord, ShiftSetting
+
+
+class ShiftSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ShiftSetting
+        fields = ["start", "end"]
 
 
 class AttendanceRecordSerializer(serializers.ModelSerializer):

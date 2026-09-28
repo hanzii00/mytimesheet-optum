@@ -12,10 +12,16 @@ export type AttendanceRecord = {
 
 export type RecordsResponse = {
   records: AttendanceRecord[];
+  open_record: AttendanceRecord | null;
   totals: {
     work_minutes: number;
     night_diff_minutes: number;
   };
+};
+
+export type ShiftSetting = {
+  start: string;
+  end: string;
 };
 
 export type CalendarDay = {

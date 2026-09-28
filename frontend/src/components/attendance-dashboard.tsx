@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { AttendanceRecord, RecordsResponse } from "@/lib/types";
+import type { AttendanceRecord, RecordsResponse, ShiftSetting } from "@/lib/types";
 import { Calendar } from "./calendar";
 import { Icon } from "./icons";
 
@@ -23,8 +23,6 @@ const shiftMonthKey = (monthKey: string, delta: number) => {
 const minutesToHours = (value: number) => `${Math.floor(value / 60)}h ${value % 60}m`;
 
 const USER_NAME_KEY = "attendance-portal:user-name";
-const SHIFT_START_KEY = "attendance-portal:shift-start";
-const SHIFT_END_KEY = "attendance-portal:shift-end";
 
 const formatTime = (value: string | null) =>
   value
@@ -80,14 +78,27 @@ export default function AttendanceDashboard() {
     } else {
       setEditingName(true);
     }
-
-    const storedShiftStart = window.localStorage.getItem(SHIFT_START_KEY) ?? "09:00";
-    const storedShiftEnd = window.localStorage.getItem(SHIFT_END_KEY) ?? "18:00";
-    setShiftStart(storedShiftStart);
-    setShiftEnd(storedShiftEnd);
-    setShiftDraftStart(storedShiftStart);
-    setShiftDraftEnd(storedShiftEnd);
   }, []);
+
+  const loadShift = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/shift/`);
+      if (!response.ok) return;
+      const setting = (await response.json()) as ShiftSetting;
+      const start = setting.start.slice(0, 5);
+      const end = setting.end.slice(0, 5);
+      setShiftStart(start);
+      setShiftEnd(end);
+      setShiftDraftStart(start);
+      setShiftDraftEnd(end);
+    } catch {
+      // Keep whatever defaults are showing if the service is unreachable.
+    }
+  }, []);
+
+  useEffect(() => {
+    loadShift();
+  }, [loadShift]);
 
   const saveName = (value: string) => {
     const trimmed = value.trim();
@@ -97,12 +108,22 @@ export default function AttendanceDashboard() {
     setEditingName(false);
   };
 
-  const saveShift = () => {
-    window.localStorage.setItem(SHIFT_START_KEY, shiftDraftStart);
-    window.localStorage.setItem(SHIFT_END_KEY, shiftDraftEnd);
-    setShiftStart(shiftDraftStart);
-    setShiftEnd(shiftDraftEnd);
-    setEditingShift(false);
+  const saveShift = async () => {
+    try {
+      const response = await fetch(`${API_URL}/shift/`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start: shiftDraftStart, end: shiftDraftEnd }),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const setting = (await response.json()) as ShiftSetting;
+      setShiftStart(setting.start.slice(0, 5));
+      setShiftEnd(setting.end.slice(0, 5));
+      setEditingShift(false);
+      setNotice("Shift saved.");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Unable to save the shift.");
+    }
   };
 
   const fetchRecords = useCallback(async (month: string) => {
@@ -127,8 +148,10 @@ export default function AttendanceDashboard() {
     fetchRecords(monthKey);
   }, [fetchRecords, monthKey]);
 
-  const todaysRecord: AttendanceRecord | null =
-    data?.records.find((record) => record.date === todayKey()) ?? null;
+  const openRecord: AttendanceRecord | null = data?.open_record ?? null;
+
+  const activeRecord: AttendanceRecord | null =
+    openRecord ?? data?.records.find((record) => record.date === todayKey()) ?? null;
 
   const selectedRecord: AttendanceRecord | null = selectedDate
     ? (data?.records.find((record) => record.date === selectedDate) ?? null)
@@ -148,12 +171,14 @@ export default function AttendanceDashboard() {
         body: action === "clock-in" ? JSON.stringify({ shift_start: shiftStart, shift_end: shiftEnd }) : undefined,
       });
       if (!response.ok) throw new Error(await readError(response));
-      if (monthKey === currentMonthKey()) {
+      const saved = (await response.json()) as AttendanceRecord;
+      const savedMonth = saved.date.slice(0, 7);
+      if (savedMonth === monthKey) {
         await fetchRecords(monthKey);
       } else {
-        goToMonth(currentMonthKey());
+        setMonthKey(savedMonth);
       }
-      setSelectedDate(todayKey());
+      setSelectedDate(saved.date);
       setNotice(action === "clock-in" ? "Time in recorded." : "Time out recorded.");
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Unable to record the time.");
@@ -283,29 +308,32 @@ export default function AttendanceDashboard() {
         <div>
           <p className="eyebrow">TIME CLOCK</p>
           <h2>
-            {todaysRecord?.first_in
-              ? todaysRecord.last_out
+            {openRecord
+              ? "You're timed in"
+              : activeRecord?.last_out
                 ? "Shift completed for today"
-                : "You're timed in"
-              : "You haven't timed in yet"}
+                : "You haven't timed in yet"}
           </h2>
+          {openRecord && openRecord.date !== todayKey() && (
+            <p className="overnight-hint">Open shift started {formatDate(openRecord.date)} — time out to close it.</p>
+          )}
           <p className="time-clock-readout">
-            <span>Time in: <strong>{formatTime(todaysRecord?.first_in ?? null)}</strong></span>
-            <span>Time out: <strong>{formatTime(todaysRecord?.last_out ?? null)}</strong></span>
-            <span>Status: <strong>{todaysRecord?.time_in_status || "—"}</strong></span>
+            <span>Time in: <strong>{formatTime(activeRecord?.first_in ?? null)}</strong></span>
+            <span>Time out: <strong>{formatTime(activeRecord?.last_out ?? null)}</strong></span>
+            <span>Status: <strong>{activeRecord?.time_in_status || "—"}</strong></span>
           </p>
         </div>
         <div className="time-clock-actions">
           <button
             className="primary-button"
-            disabled={busy !== null || Boolean(todaysRecord?.first_in)}
+            disabled={busy !== null || Boolean(openRecord) || Boolean(activeRecord?.first_in)}
             onClick={() => handleClock("clock-in")}
           >
             <Icon name="clock" size={18} />Time In
           </button>
           <button
             className="secondary-button compact"
-            disabled={busy !== null || !todaysRecord?.first_in || Boolean(todaysRecord?.last_out)}
+            disabled={busy !== null || !openRecord}
             onClick={() => handleClock("clock-out")}
           >
             <Icon name="clock" size={18} />Time Out

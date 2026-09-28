@@ -69,6 +69,54 @@ class AttendanceApiTests(TestCase):
         response = self.client.post(reverse("clock-in"), {"shift_start": "9am"})
         self.assertEqual(response.status_code, 400)
 
+    def test_shift_setting_persists_and_is_returned(self):
+        response = self.client.put(reverse("shift-setting"), {"start": "18:00", "end": "03:00"}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["start"], "18:00:00")
+        self.assertEqual(response.data["end"], "03:00:00")
+
+        response = self.client.get(reverse("shift-setting"))
+        self.assertEqual(response.data["start"], "18:00:00")
+        self.assertEqual(response.data["end"], "03:00:00")
+
+    def test_clock_in_falls_back_to_saved_shift(self):
+        self.client.put(reverse("shift-setting"), {"start": "18:00", "end": "03:00"}, format="json")
+        today = timezone.localdate()
+        clock_in_at = timezone.make_aware(datetime.combine(today, time(17, 51)))
+
+        with mock.patch("django.utils.timezone.now", return_value=clock_in_at):
+            response = self.client.post(reverse("clock-in"))
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["shift_start"], "18:00:00")
+        self.assertEqual(response.data["time_in_status"], "Almost late")
+
+    def test_records_exposes_open_overnight_session(self):
+        yesterday = timezone.localdate() - timedelta(days=1)
+        AttendanceRecord.objects.create(
+            date=yesterday,
+            first_in=timezone.make_aware(datetime.combine(yesterday, time(18, 0))),
+            shift_start=time(18, 0),
+            shift_end=time(3, 0),
+        )
+
+        response = self.client.get(reverse("records"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(response.data["open_record"])
+        self.assertEqual(response.data["open_record"]["date"], yesterday.isoformat())
+
+    def test_clock_out_closes_session_started_yesterday(self):
+        yesterday = timezone.localdate() - timedelta(days=1)
+        started_at = timezone.make_aware(datetime.combine(yesterday, time(18, 0)))
+        AttendanceRecord.objects.create(date=yesterday, first_in=started_at, shift_start=time(18, 0))
+
+        with mock.patch("django.utils.timezone.now", return_value=started_at + timedelta(hours=9)):
+            response = self.client.post(reverse("clock-out"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["date"], yesterday.isoformat())
+        self.assertAlmostEqual(response.data["work_minutes"], 540, delta=1)
+
     def test_clock_out_requires_clock_in_first(self):
         response = self.client.post(reverse("clock-out"))
         self.assertEqual(response.status_code, 400)
