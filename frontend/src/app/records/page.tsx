@@ -17,6 +17,7 @@ import {
   statusClass,
 } from "@/lib/format";
 import { Icon } from "@/components/icons";
+import { clearRecordsCache, readCache, recordsCacheKey, writeCache } from "@/lib/cache";
 
 function RecordsView() {
   const searchParams = useSearchParams();
@@ -26,12 +27,23 @@ function RecordsView() {
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const loadRecords = useCallback(async (key: string) => {
+  const loadRecords = useCallback(async (key: string, force = false) => {
+    if (!force) {
+      const cached = readCache<RecordsResponse>(recordsCacheKey(key));
+      if (cached) {
+        setData(cached);
+        setLoading(false);
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       const response = await fetch(`${API_URL}/records/?month=${key}`);
       if (!response.ok) throw new Error(await readError(response));
-      setData(await response.json());
+      const payload = (await response.json()) as RecordsResponse;
+      writeCache(recordsCacheKey(key), payload);
+      setData(payload);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Unable to load attendance records.");
     } finally {
@@ -42,6 +54,11 @@ function RecordsView() {
   useEffect(() => {
     loadRecords(monthKey);
   }, [loadRecords, monthKey]);
+
+  const handleRefresh = async () => {
+    clearRecordsCache();
+    await loadRecords(monthKey, true);
+  };
 
   const handleExport = async () => {
     setExporting(true);
@@ -81,6 +98,9 @@ function RecordsView() {
             <button className="secondary-button compact" onClick={() => setMonthKey(currentMonthKey())}>This month</button>
             <button className="icon-button" onClick={() => setMonthKey(shiftMonthKey(monthKey, 1))} aria-label="Next month">›</button>
           </div>
+          <button className="secondary-button compact" disabled={loading} onClick={handleRefresh}>
+            {loading ? "Refreshing…" : "Refresh"}
+          </button>
           <button className="primary-button compact" disabled={exporting || records.length === 0} onClick={handleExport}>
             <Icon name="chart" size={16} />
             {exporting ? "Exporting…" : "Export to Excel"}

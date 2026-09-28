@@ -18,6 +18,7 @@ import {
 } from "@/lib/format";
 import { Calendar } from "./calendar";
 import { Icon } from "./icons";
+import { SHIFT_CACHE_KEY, clearRecordsCache, readCache, recordsCacheKey, writeCache } from "@/lib/cache";
 
 const USER_NAME_KEY = "attendance-portal:user-name";
 
@@ -37,6 +38,7 @@ export default function AttendanceDashboard() {
   const [shiftDraftStart, setShiftDraftStart] = useState("09:00");
   const [shiftDraftEnd, setShiftDraftEnd] = useState("18:00");
   const [editingShift, setEditingShift] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(USER_NAME_KEY);
@@ -47,17 +49,28 @@ export default function AttendanceDashboard() {
     }
   }, []);
 
-  const loadShift = useCallback(async () => {
-    try {
-      const response = await fetch(`${API_URL}/shift/`);
-      if (!response.ok) return;
-      const setting = (await response.json()) as ShiftSetting;
-      const start = setting.start.slice(0, 5);
-      const end = setting.end.slice(0, 5);
+  const loadShift = useCallback(async (force = false) => {
+    const applyShift = (start: string, end: string) => {
       setShiftStart(start);
       setShiftEnd(end);
       setShiftDraftStart(start);
       setShiftDraftEnd(end);
+    };
+
+    if (!force) {
+      const cached = readCache<ShiftSetting>(SHIFT_CACHE_KEY);
+      if (cached) {
+        applyShift(cached.start.slice(0, 5), cached.end.slice(0, 5));
+        return;
+      }
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/shift/`);
+      if (!response.ok) return;
+      const setting = (await response.json()) as ShiftSetting;
+      writeCache(SHIFT_CACHE_KEY, setting);
+      applyShift(setting.start.slice(0, 5), setting.end.slice(0, 5));
     } catch {
       // Keep whatever defaults are showing if the service is unreachable.
     }
@@ -84,6 +97,7 @@ export default function AttendanceDashboard() {
       });
       if (!response.ok) throw new Error(await readError(response));
       const setting = (await response.json()) as ShiftSetting;
+      writeCache(SHIFT_CACHE_KEY, setting);
       setShiftStart(setting.start.slice(0, 5));
       setShiftEnd(setting.end.slice(0, 5));
       setEditingShift(false);
@@ -93,12 +107,24 @@ export default function AttendanceDashboard() {
     }
   };
 
-  const fetchRecords = useCallback(async (month: string) => {
+  const fetchRecords = useCallback(async (month: string, force = false) => {
+    if (!force) {
+      const cached = readCache<RecordsResponse>(recordsCacheKey(month));
+      if (cached) {
+        setData(cached);
+        setError("");
+        setLoading(false);
+        return;
+      }
+    }
+
     setError("");
     try {
       const response = await fetch(`${API_URL}/records/?month=${month}`);
       if (!response.ok) throw new Error(await readError(response));
-      setData((await response.json()) as RecordsResponse);
+      const payload = (await response.json()) as RecordsResponse;
+      writeCache(recordsCacheKey(month), payload);
+      setData(payload);
     } catch (err) {
       setError(
         err instanceof Error
@@ -111,7 +137,6 @@ export default function AttendanceDashboard() {
   }, []);
 
   useEffect(() => {
-    setLoading(true);
     fetchRecords(monthKey);
   }, [fetchRecords, monthKey]);
 
@@ -140,8 +165,9 @@ export default function AttendanceDashboard() {
       if (!response.ok) throw new Error(await readError(response));
       const saved = (await response.json()) as AttendanceRecord;
       const savedMonth = saved.date.slice(0, 7);
+      clearRecordsCache();
       if (savedMonth === monthKey) {
-        await fetchRecords(monthKey);
+        await fetchRecords(monthKey, true);
       } else {
         setMonthKey(savedMonth);
       }
@@ -154,6 +180,13 @@ export default function AttendanceDashboard() {
     }
   };
 
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    clearRecordsCache();
+    await Promise.all([fetchRecords(monthKey, true), loadShift(true)]);
+    setRefreshing(false);
+  };
+
   if (loading) {
     return <div className="state-screen"><p>Loading attendance…</p></div>;
   }
@@ -162,7 +195,7 @@ export default function AttendanceDashboard() {
     return (
       <div className="state-screen">
         <p>{error || "No attendance data available."}</p>
-        <button className="primary-button" onClick={() => { setLoading(true); fetchRecords(monthKey); }}>Retry</button>
+        <button className="primary-button" onClick={() => { setLoading(true); fetchRecords(monthKey, true); }}>Retry</button>
       </div>
     );
   }
@@ -182,7 +215,12 @@ export default function AttendanceDashboard() {
             </button>
           )}
         </div>
-        <div className="today"><span className="status-dot" />{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "short", day: "numeric" }).format(new Date())}</div>
+        <div className="header-aside">
+          <div className="today"><span className="status-dot" />{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "short", day: "numeric" }).format(new Date())}</div>
+          <button className="secondary-button compact" disabled={refreshing} onClick={handleRefresh}>
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </header>
 
       {editingName && (
