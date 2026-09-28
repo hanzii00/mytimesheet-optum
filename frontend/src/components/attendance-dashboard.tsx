@@ -1,58 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import type { AttendanceRecord, RecordsResponse, ShiftSetting } from "@/lib/types";
+import {
+  API_URL,
+  currentMonthKey,
+  formatDate,
+  formatMonth,
+  formatShiftTime,
+  formatTime,
+  minutesToHours,
+  readError,
+  shiftMonthKey,
+  statusClass,
+  todayKey,
+} from "@/lib/format";
 import { Calendar } from "./calendar";
 import { Icon } from "./icons";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
-
-const todayKey = () => {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-};
-
-const currentMonthKey = () => todayKey().slice(0, 7);
-
-const shiftMonthKey = (monthKey: string, delta: number) => {
-  const [year, month] = monthKey.split("-").map(Number);
-  const shifted = new Date(year, month - 1 + delta, 1);
-  return `${shifted.getFullYear()}-${String(shifted.getMonth() + 1).padStart(2, "0")}`;
-};
-
-const minutesToHours = (value: number) => `${Math.floor(value / 60)}h ${value % 60}m`;
-
 const USER_NAME_KEY = "attendance-portal:user-name";
-
-const formatTime = (value: string | null) =>
-  value
-    ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(value))
-    : "—";
-
-const formatShiftTime = (value: string | null) => {
-  if (!value) return "—";
-  const [hour, minute] = value.split(":");
-  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(
-    new Date(`2026-01-01T${hour}:${minute}:00`),
-  );
-};
-
-const formatDate = (value: string) =>
-  new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }).format(
-    new Date(`${value}T12:00:00`),
-  );
-
-const statusClass = (value: string | undefined) =>
-  value ? `status-pill ${value.toLowerCase().replaceAll(" ", "-")}` : "status-pill neutral";
-
-async function readError(response: Response) {
-  try {
-    const payload = await response.json();
-    return payload.detail ?? Object.values(payload).flat().join(" ");
-  } catch {
-    return "Something went wrong. Please try again.";
-  }
-}
 
 export default function AttendanceDashboard() {
   const [monthKey, setMonthKey] = useState(currentMonthKey());
@@ -61,7 +28,7 @@ export default function AttendanceDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [busy, setBusy] = useState<"in" | "out" | "export" | null>(null);
+  const [busy, setBusy] = useState<"in" | "out" | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -187,28 +154,6 @@ export default function AttendanceDashboard() {
     }
   };
 
-  const handleExport = async () => {
-    setBusy("export");
-    try {
-      const response = await fetch(`${API_URL}/export/?month=${monthKey}`);
-      if (!response.ok) throw new Error(await readError(response));
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `attendance_${monthKey}.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      setNotice("Excel file downloaded.");
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Unable to export the attendance file.");
-    } finally {
-      setBusy(null);
-    }
-  };
-
   if (loading) {
     return <div className="state-screen"><p>Loading attendance…</p></div>;
   }
@@ -267,147 +212,162 @@ export default function AttendanceDashboard() {
 
       {notice && <button className="notice" onClick={() => setNotice("")}>{notice}<span>×</span></button>}
 
-      <section className="shift-card">
-        <div>
-          <p className="eyebrow">ATTACHED SHIFT</p>
-          <h2>{formatShiftTime(shiftStart)} – {formatShiftTime(shiftEnd)}</h2>
-          <p>Time-in labels are based on this shift start: Early bird, Ahead of the bell, Almost late, Right on time, or Late arrival.</p>
+      <section className="hero">
+        <div className="hero-main">
+          <div className="hero-status">
+            <p className="eyebrow">TIME CLOCK</p>
+            <h2>
+              {openRecord
+                ? "You're timed in"
+                : activeRecord?.last_out
+                  ? "Shift completed for today"
+                  : "You haven't timed in yet"}
+            </h2>
+            {openRecord && openRecord.date !== todayKey() && (
+              <p className="overnight-hint">Open shift started {formatDate(openRecord.date)} — time out to close it.</p>
+            )}
+          </div>
+          <div className="time-clock-actions">
+            <button
+              className={openRecord ? "secondary-button" : "primary-button"}
+              disabled={busy !== null || Boolean(openRecord) || Boolean(activeRecord?.first_in)}
+              onClick={() => handleClock("clock-in")}
+            >
+              <Icon name="clock" size={18} />Time In
+            </button>
+            <button
+              className={openRecord ? "primary-button" : "secondary-button"}
+              disabled={busy !== null || !openRecord}
+              onClick={() => handleClock("clock-out")}
+            >
+              <Icon name="clock" size={18} />Time Out
+            </button>
+          </div>
         </div>
-        {editingShift ? (
-          <form
-            className="shift-form"
-            onSubmit={(event) => { event.preventDefault(); saveShift(); }}
-          >
+
+        <div className="hero-readout">
+          <div className="readout-item">
+            <span>Time in</span>
+            <strong>{formatTime(activeRecord?.first_in ?? null)}</strong>
+          </div>
+          <div className="readout-item">
+            <span>Time out</span>
+            <strong>{formatTime(activeRecord?.last_out ?? null)}</strong>
+          </div>
+          <div className="readout-item">
+            <span>Status</span>
+            {activeRecord?.time_in_status
+              ? <span className={statusClass(activeRecord.time_in_status)}>{activeRecord.time_in_status}</span>
+              : <strong>—</strong>}
+          </div>
+          <div className="readout-item readout-shift">
+            <span>Shift</span>
+            <span className="shift-value">
+              <strong>{formatShiftTime(shiftStart)} – {formatShiftTime(shiftEnd)}</strong>
+              {!editingShift && <button className="link-button" onClick={() => setEditingShift(true)}>Edit</button>}
+            </span>
+          </div>
+        </div>
+
+        {editingShift && (
+          <form className="shift-form" onSubmit={(event) => { event.preventDefault(); saveShift(); }}>
             <label>
-              Start
+              <span>Shift start</span>
               <input type="time" value={shiftDraftStart} onChange={(event) => setShiftDraftStart(event.target.value)} required />
             </label>
             <label>
-              End
+              <span>Shift end</span>
               <input type="time" value={shiftDraftEnd} onChange={(event) => setShiftDraftEnd(event.target.value)} required />
             </label>
-            <button type="submit" className="primary-button compact">Save shift</button>
-            <button
-              type="button"
-              className="secondary-button compact"
-              onClick={() => {
-                setShiftDraftStart(shiftStart);
-                setShiftDraftEnd(shiftEnd);
-                setEditingShift(false);
-              }}
-            >
-              Cancel
-            </button>
+            <div className="shift-form-actions">
+              <button type="submit" className="primary-button compact">Save shift</button>
+              <button
+                type="button"
+                className="secondary-button compact"
+                onClick={() => {
+                  setShiftDraftStart(shiftStart);
+                  setShiftDraftEnd(shiftEnd);
+                  setEditingShift(false);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
           </form>
-        ) : (
-          <button className="secondary-button compact" onClick={() => setEditingShift(true)}>Edit shift</button>
         )}
       </section>
 
-      <section className="time-clock">
-        <div>
-          <p className="eyebrow">TIME CLOCK</p>
-          <h2>
-            {openRecord
-              ? "You're timed in"
-              : activeRecord?.last_out
-                ? "Shift completed for today"
-                : "You haven't timed in yet"}
-          </h2>
-          {openRecord && openRecord.date !== todayKey() && (
-            <p className="overnight-hint">Open shift started {formatDate(openRecord.date)} — time out to close it.</p>
-          )}
-          <p className="time-clock-readout">
-            <span>Time in: <strong>{formatTime(activeRecord?.first_in ?? null)}</strong></span>
-            <span>Time out: <strong>{formatTime(activeRecord?.last_out ?? null)}</strong></span>
-            <span>Status: <strong>{activeRecord?.time_in_status || "—"}</strong></span>
-          </p>
+      <section className="stat-row">
+        <div className="stat-card">
+          <span>Hours this month</span>
+          <strong>{minutesToHours(data.totals.work_minutes)}</strong>
         </div>
-        <div className="time-clock-actions">
-          <button
-            className="primary-button"
-            disabled={busy !== null || Boolean(openRecord) || Boolean(activeRecord?.first_in)}
-            onClick={() => handleClock("clock-in")}
-          >
-            <Icon name="clock" size={18} />Time In
-          </button>
-          <button
-            className="secondary-button compact"
-            disabled={busy !== null || !openRecord}
-            onClick={() => handleClock("clock-out")}
-          >
-            <Icon name="clock" size={18} />Time Out
-          </button>
+        <div className="stat-card">
+          <span>Night diff (10 PM–5 AM)</span>
+          <strong>{minutesToHours(data.totals.night_diff_minutes)}</strong>
+        </div>
+        <div className="stat-card">
+          <span>Days logged</span>
+          <strong>{data.records.length}</strong>
         </div>
       </section>
 
       <section className="content-grid">
-        <Calendar
-          monthKey={monthKey}
-          records={data.records}
-          todayKey={todayKey()}
-          selectedDate={selectedDate}
-          onSelectDate={setSelectedDate}
-          onPrevMonth={() => goToMonth(shiftMonthKey(monthKey, -1))}
-          onNextMonth={() => goToMonth(shiftMonthKey(monthKey, 1))}
-          onToday={() => { setMonthKey(currentMonthKey()); setSelectedDate(todayKey()); }}
-        />
-
-        <section className="panel day-detail">
-          <h2>{selectedDate ? formatDate(selectedDate) : "Select a day"}</h2>
-          {selectedDate ? (
-            <dl className="day-detail-list">
-              <div><dt>Shift</dt><dd>{formatShiftTime(selectedRecord?.shift_start ?? null)} – {formatShiftTime(selectedRecord?.shift_end ?? null)}</dd></div>
-              <div><dt>Time in</dt><dd>{formatTime(selectedRecord?.first_in ?? null)}</dd></div>
-              <div><dt>Time in label</dt><dd><span className={statusClass(selectedRecord?.time_in_status)}>{selectedRecord?.time_in_status || "No label"}</span></dd></div>
-              <div><dt>Time out</dt><dd>{formatTime(selectedRecord?.last_out ?? null)}</dd></div>
-              <div><dt>Hours worked</dt><dd>{minutesToHours(selectedRecord?.work_minutes ?? 0)}</dd></div>
-              <div><dt>Night diff (10 PM–5 AM)</dt><dd>{minutesToHours(selectedRecord?.night_diff_minutes ?? 0)}</dd></div>
-            </dl>
-          ) : (
-            <p className="day-detail-empty">Pick a day on the calendar to view its details.</p>
-          )}
-        </section>
-      </section>
-
-      <section className="panel table-panel">
-        <div className="panel-header">
-          <div>
-            <h2>{new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(new Date(`${monthKey}-01T12:00:00`))} records</h2>
-            <p>Total hours logged: {minutesToHours(data.totals.work_minutes)} · Night diff: {minutesToHours(data.totals.night_diff_minutes)}</p>
-          </div>
-          <button className="secondary-button compact" disabled={busy !== null || data.records.length === 0} onClick={handleExport}>
-            <Icon name="chart" size={16} />
-            {busy === "export" ? "Exporting…" : "Export to Excel"}
-          </button>
+        <div className="content-main">
+          <Calendar
+            monthKey={monthKey}
+            records={data.records}
+            todayKey={todayKey()}
+            selectedDate={selectedDate}
+            onSelectDate={setSelectedDate}
+            onPrevMonth={() => goToMonth(shiftMonthKey(monthKey, -1))}
+            onNextMonth={() => goToMonth(shiftMonthKey(monthKey, 1))}
+            onToday={() => { setMonthKey(currentMonthKey()); setSelectedDate(todayKey()); }}
+          />
         </div>
-        {data.records.length === 0 ? (
-          <div className="empty-state">
-            <h2>No attendance recorded yet</h2>
-            <p>Use the time clock above to record your first time in and out for the day.</p>
-          </div>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr><th>Date</th><th>Shift</th><th>Time In</th><th>Status</th><th>Time Out</th><th>Hours worked</th><th>Night diff</th></tr>
-              </thead>
-              <tbody>
+
+        <aside className="content-side">
+          <div className="content-side-inner">
+          <section className="panel day-detail">
+            <h2>{selectedDate ? formatDate(selectedDate) : "Select a day"}</h2>
+            {selectedDate ? (
+              <dl className="day-detail-list">
+                <div><dt>Shift</dt><dd>{formatShiftTime(selectedRecord?.shift_start ?? null)} – {formatShiftTime(selectedRecord?.shift_end ?? null)}</dd></div>
+                <div><dt>Time in</dt><dd>{formatTime(selectedRecord?.first_in ?? null)}</dd></div>
+                <div><dt>Time in label</dt><dd><span className={statusClass(selectedRecord?.time_in_status)}>{selectedRecord?.time_in_status || "No label"}</span></dd></div>
+                <div><dt>Time out</dt><dd>{formatTime(selectedRecord?.last_out ?? null)}</dd></div>
+                <div><dt>Hours worked</dt><dd>{minutesToHours(selectedRecord?.work_minutes ?? 0)}</dd></div>
+                <div><dt>Night diff (10 PM–5 AM)</dt><dd>{minutesToHours(selectedRecord?.night_diff_minutes ?? 0)}</dd></div>
+              </dl>
+            ) : (
+              <p className="day-detail-empty">Pick a day on the calendar to view its details.</p>
+            )}
+          </section>
+
+          <Link href={`/records?month=${monthKey}`} className="panel records-preview">
+            <div className="records-preview-header">
+              <div>
+                <h2>{formatMonth(monthKey)} records</h2>
+                <p>{data.records.length} {data.records.length === 1 ? "day" : "days"} recorded</p>
+              </div>
+              <span className="records-preview-open">Open<Icon name="chart" size={14} /></span>
+            </div>
+            {data.records.length === 0 ? (
+              <p className="records-preview-empty">No attendance recorded yet.</p>
+            ) : (
+              <ul className="records-preview-list">
                 {data.records.map((record) => (
-                  <tr key={record.id}>
-                    <td><strong>{formatDate(record.date)}</strong></td>
-                    <td>{formatShiftTime(record.shift_start)} – {formatShiftTime(record.shift_end)}</td>
-                    <td>{formatTime(record.first_in)}</td>
-                    <td><span className={statusClass(record.time_in_status)}>{record.time_in_status || "No label"}</span></td>
-                    <td>{formatTime(record.last_out)}</td>
-                    <td>{minutesToHours(record.work_minutes)}</td>
-                    <td>{minutesToHours(record.night_diff_minutes)}</td>
-                  </tr>
+                  <li key={record.id} className={record.date === selectedDate ? "is-selected" : undefined}>
+                    <span className="records-preview-date">{formatDate(record.date)}</span>
+                    <span className="records-preview-hours">{minutesToHours(record.work_minutes)}</span>
+                    <span className="records-preview-time">{formatTime(record.first_in)} – {formatTime(record.last_out)}</span>
+                  </li>
                 ))}
-              </tbody>
-            </table>
+              </ul>
+            )}
+          </Link>
           </div>
-        )}
+        </aside>
       </section>
     </div>
   );
