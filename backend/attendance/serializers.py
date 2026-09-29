@@ -15,6 +15,7 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "date",
+            "work_location",
             "first_in",
             "last_out",
             "shift_start",

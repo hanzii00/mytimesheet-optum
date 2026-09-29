@@ -25,7 +25,12 @@ class ShiftSetting(models.Model):
 class AttendanceRecord(models.Model):
     """A single day's self-recorded attendance: one time in and one time out."""
 
+    class WorkLocation(models.TextChoices):
+        RTO = "RTO", "RTO"
+        WFH = "WFH", "WFH"
+
     date = models.DateField(unique=True)
+    work_location = models.CharField(max_length=3, choices=WorkLocation.choices, blank=True)
     first_in = models.DateTimeField(null=True, blank=True)
     last_out = models.DateTimeField(null=True, blank=True)
     shift_start = models.TimeField(null=True, blank=True)

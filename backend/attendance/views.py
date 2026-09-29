@@ -73,6 +73,13 @@ def records(request):
 
 @api_view(["POST"])
 def clock_in(request):
+    work_location = request.data.get("work_location")
+    if work_location not in AttendanceRecord.WorkLocation.values:
+        return Response(
+            {"detail": "Choose either RTO (return to office) or WFH (work from home)."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     try:
         shift_start = parse_shift_time(request.data.get("shift_start"), "Shift start")
         shift_end = parse_shift_time(request.data.get("shift_end"), "Shift end")
@@ -104,6 +111,7 @@ def clock_in(request):
     today = timezone.localdate()
     now = timezone.now()
     defaults = {
+        "work_location": work_location,
         "first_in": now,
         "shift_start": shift_start,
         "shift_end": shift_end,
@@ -111,11 +119,12 @@ def clock_in(request):
     }
     record, created = AttendanceRecord.objects.get_or_create(date=today, defaults=defaults)
     if not created:
+        record.work_location = work_location
         record.first_in = now
         record.shift_start = shift_start
         record.shift_end = shift_end
         record.time_in_status = compute_time_in_status(now, shift_start)
-        record.save(update_fields=["first_in", "shift_start", "shift_end", "time_in_status"])
+        record.save(update_fields=["work_location", "first_in", "shift_start", "shift_end", "time_in_status"])
     return Response(
         AttendanceRecordSerializer(record).data,
         status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
@@ -153,7 +162,7 @@ def export_excel(request):
     sheet = workbook.active
     sheet.title = "Attendance"
 
-    headers = ["Date", "Shift Start", "Shift End", "Time In", "Time Out", "Time In Label", "Hours Worked", "Night Diff Hours"]
+    headers = ["Date", "Work Location", "Shift Start", "Shift End", "Time In", "Time Out", "Time In Label", "Hours Worked", "Night Diff Hours"]
     sheet.append(headers)
     for cell in sheet[1]:
         cell.font = Font(bold=True)
@@ -168,6 +177,7 @@ def export_excel(request):
         night_diff_hours = round(record.night_diff_minutes / 60, 2) if record.night_diff_minutes else 0
         sheet.append([
             record.date.strftime("%Y-%m-%d"),
+            record.work_location,
             shift_start,
             shift_end,
             time_in,

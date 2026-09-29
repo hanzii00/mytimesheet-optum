@@ -1,6 +1,7 @@
 export type AttendanceRecord = {
   id: number;
   date: string;
+  work_location: "RTO" | "WFH" | "";
   first_in: string | null;
   last_out: string | null;
   shift_start: string | null;

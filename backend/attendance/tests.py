@@ -22,15 +22,20 @@ class AttendanceApiTests(TestCase):
 
     def test_clock_in_creates_todays_record(self):
         self.assertEqual(AttendanceRecord.objects.count(), 0)
-        response = self.client.post(reverse("clock-in"))
+        response = self.client.post(reverse("clock-in"), {"work_location": "RTO"})
         self.assertEqual(response.status_code, 201)
         self.assertIsNotNone(response.data["first_in"])
         self.assertIsNone(response.data["last_out"])
         self.assertEqual(AttendanceRecord.objects.count(), 1)
 
-    def test_double_clock_in_is_rejected(self):
-        self.client.post(reverse("clock-in"))
+    def test_clock_in_requires_work_location(self):
         response = self.client.post(reverse("clock-in"))
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(AttendanceRecord.objects.count(), 0)
+
+    def test_double_clock_in_is_rejected(self):
+        self.client.post(reverse("clock-in"), {"work_location": "RTO"})
+        response = self.client.post(reverse("clock-in"), {"work_location": "RTO"})
         self.assertEqual(response.status_code, 400)
 
     def test_clock_in_attaches_shift_and_labels_almost_late(self):
@@ -38,7 +43,7 @@ class AttendanceApiTests(TestCase):
         almost_late = timezone.make_aware(datetime.combine(today, time(8, 55)))
 
         with mock.patch("django.utils.timezone.now", return_value=almost_late):
-            response = self.client.post(reverse("clock-in"), {"shift_start": "09:00", "shift_end": "18:00"})
+            response = self.client.post(reverse("clock-in"), {"shift_start": "09:00", "shift_end": "18:00", "work_location": "RTO"})
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["shift_start"], "09:00:00")
@@ -50,7 +55,7 @@ class AttendanceApiTests(TestCase):
         early = timezone.make_aware(datetime.combine(today, time(7, 45)))
 
         with mock.patch("django.utils.timezone.now", return_value=early):
-            response = self.client.post(reverse("clock-in"), {"shift_start": "09:00"})
+            response = self.client.post(reverse("clock-in"), {"shift_start": "09:00", "work_location": "WFH"})
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["time_in_status"], "Early bird")
@@ -60,13 +65,13 @@ class AttendanceApiTests(TestCase):
         late = timezone.make_aware(datetime.combine(today, time(9, 1)))
 
         with mock.patch("django.utils.timezone.now", return_value=late):
-            response = self.client.post(reverse("clock-in"), {"shift_start": "09:00"})
+            response = self.client.post(reverse("clock-in"), {"shift_start": "09:00", "work_location": "RTO"})
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["time_in_status"], "Late arrival")
 
     def test_clock_in_rejects_invalid_shift_time(self):
-        response = self.client.post(reverse("clock-in"), {"shift_start": "9am"})
+        response = self.client.post(reverse("clock-in"), {"shift_start": "9am", "work_location": "RTO"})
         self.assertEqual(response.status_code, 400)
 
     def test_shift_setting_persists_and_is_returned(self):
@@ -85,7 +90,7 @@ class AttendanceApiTests(TestCase):
         clock_in_at = timezone.make_aware(datetime.combine(today, time(17, 51)))
 
         with mock.patch("django.utils.timezone.now", return_value=clock_in_at):
-            response = self.client.post(reverse("clock-in"))
+            response = self.client.post(reverse("clock-in"), {"work_location": "WFH"})
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["shift_start"], "18:00:00")
@@ -122,13 +127,13 @@ class AttendanceApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_double_clock_out_is_rejected(self):
-        self.client.post(reverse("clock-in"))
+        self.client.post(reverse("clock-in"), {"work_location": "RTO"})
         self.client.post(reverse("clock-out"))
         response = self.client.post(reverse("clock-out"))
         self.assertEqual(response.status_code, 400)
 
     def test_clock_out_records_last_out_and_work_minutes(self):
-        self.client.post(reverse("clock-in"))
+        self.client.post(reverse("clock-in"), {"work_location": "RTO"})
         record = AttendanceRecord.objects.get(date=timezone.localdate())
         record.first_in = timezone.now() - timedelta(hours=8)
         record.save(update_fields=["first_in"])
@@ -140,7 +145,7 @@ class AttendanceApiTests(TestCase):
         self.assertAlmostEqual(record.work_minutes, 480, delta=1)
 
     def test_night_diff_is_computed_for_overnight_shift(self):
-        self.client.post(reverse("clock-in"))
+        self.client.post(reverse("clock-in"), {"work_location": "RTO"})
         record = AttendanceRecord.objects.get(date=timezone.localdate())
         today = timezone.localdate()
         shift_start = timezone.make_aware(datetime.combine(today, time(21, 0)))
@@ -156,7 +161,7 @@ class AttendanceApiTests(TestCase):
         self.assertAlmostEqual(record.night_diff_minutes, 420, delta=1)
 
     def test_day_shift_has_no_night_diff(self):
-        self.client.post(reverse("clock-in"))
+        self.client.post(reverse("clock-in"), {"work_location": "RTO"})
         record = AttendanceRecord.objects.get(date=timezone.localdate())
         today = timezone.localdate()
         shift_start = timezone.make_aware(datetime.combine(today, time(8, 0)))
@@ -195,10 +200,11 @@ class AttendanceApiTests(TestCase):
         header = [cell.value for cell in sheet[1]]
         self.assertEqual(
             header,
-            ["Date", "Shift Start", "Shift End", "Time In", "Time Out", "Time In Label", "Hours Worked", "Night Diff Hours"],
+            ["Date", "Work Location", "Shift Start", "Shift End", "Time In", "Time Out", "Time In Label", "Hours Worked", "Night Diff Hours"],
         )
         data_row = [cell.value for cell in sheet[2]]
         self.assertEqual(data_row[0], today.strftime("%Y-%m-%d"))
-        self.assertEqual(data_row[5], "Right on time")
-        self.assertEqual(data_row[6], 9.0)
-        self.assertEqual(data_row[7], 1.0)
+        self.assertIsNone(data_row[1])
+        self.assertEqual(data_row[6], "Right on time")
+        self.assertEqual(data_row[7], 9.0)
+        self.assertEqual(data_row[8], 1.0)

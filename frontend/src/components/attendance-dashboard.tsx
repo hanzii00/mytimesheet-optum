@@ -30,6 +30,7 @@ export default function AttendanceDashboard() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState<"in" | "out" | null>(null);
+  const [workLocation, setWorkLocation] = useState<"RTO" | "WFH" | "">("");
   const [userName, setUserName] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -145,6 +146,12 @@ export default function AttendanceDashboard() {
   const activeRecord: AttendanceRecord | null =
     openRecord ?? data?.records.find((record) => record.date === todayKey()) ?? null;
 
+  useEffect(() => {
+    if (activeRecord?.work_location) {
+      setWorkLocation(activeRecord.work_location);
+    }
+  }, [activeRecord?.work_location]);
+
   const selectedRecord: AttendanceRecord | null = selectedDate
     ? (data?.records.find((record) => record.date === selectedDate) ?? null)
     : null;
@@ -160,7 +167,9 @@ export default function AttendanceDashboard() {
       const response = await fetch(`${API_URL}/${action}/`, {
         method: "POST",
         headers: action === "clock-in" ? { "Content-Type": "application/json" } : undefined,
-        body: action === "clock-in" ? JSON.stringify({ shift_start: shiftStart, shift_end: shiftEnd }) : undefined,
+        body: action === "clock-in"
+          ? JSON.stringify({ shift_start: shiftStart, shift_end: shiftEnd, work_location: workLocation })
+          : undefined,
       });
       if (!response.ok) throw new Error(await readError(response));
       const saved = (await response.json()) as AttendanceRecord;
@@ -268,7 +277,7 @@ export default function AttendanceDashboard() {
           <div className="time-clock-actions">
             <button
               className={openRecord ? "secondary-button" : "primary-button"}
-              disabled={busy !== null || Boolean(openRecord) || Boolean(activeRecord?.first_in)}
+              disabled={busy !== null || Boolean(openRecord) || Boolean(activeRecord?.first_in) || !workLocation}
               onClick={() => handleClock("clock-in")}
             >
               <Icon name="clock" size={18} />Time In
@@ -284,6 +293,23 @@ export default function AttendanceDashboard() {
         </div>
 
         <div className="hero-readout">
+          <div className="readout-item location-readout">
+            <span>Work location</span>
+            <div className="location-options" role="group" aria-label="Work location for today">
+              {(["RTO", "WFH"] as const).map((location) => (
+                <button
+                  key={location}
+                  type="button"
+                  className={`location-option ${workLocation === location ? "is-selected" : ""}`}
+                  disabled={Boolean(activeRecord?.first_in) || busy !== null}
+                  onClick={() => setWorkLocation(location)}
+                >
+                  {location}
+                  <small>{location === "RTO" ? "Return to office" : "Work from home"}</small>
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="readout-item">
             <span>Time in</span>
             <strong>{formatTime(activeRecord?.first_in ?? null)}</strong>
@@ -370,6 +396,7 @@ export default function AttendanceDashboard() {
             <h2>{selectedDate ? formatDate(selectedDate) : "Select a day"}</h2>
             {selectedDate ? (
               <dl className="day-detail-list">
+                <div><dt>Work location</dt><dd>{selectedRecord?.work_location || "Not set"}</dd></div>
                 <div><dt>Shift</dt><dd>{formatShiftTime(selectedRecord?.shift_start ?? null)} – {formatShiftTime(selectedRecord?.shift_end ?? null)}</dd></div>
                 <div><dt>Time in</dt><dd>{formatTime(selectedRecord?.first_in ?? null)}</dd></div>
                 <div><dt>Time in label</dt><dd><span className={statusClass(selectedRecord?.time_in_status)}>{selectedRecord?.time_in_status || "No label"}</span></dd></div>

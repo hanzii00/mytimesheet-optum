@@ -139,12 +139,13 @@ function RecordsView() {
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>Date</th><th>Shift</th><th>Time In</th><th>Status</th><th>Time Out</th><th>Hours worked</th><th>Night diff</th></tr>
+                <tr><th>Date</th><th>Work location</th><th>Shift</th><th>Time In</th><th>Status</th><th>Time Out</th><th>Hours worked</th><th>Night diff</th></tr>
               </thead>
               <tbody>
                 {records.map((record) => (
                   <tr key={record.id}>
                     <td><strong>{formatDate(record.date)}</strong></td>
+                    <td>{record.work_location || "Not set"}</td>
                     <td>{formatShiftTime(record.shift_start)} – {formatShiftTime(record.shift_end)}</td>
                     <td>{formatTime(record.first_in)}</td>
                     <td><span className={statusClass(record.time_in_status)}>{record.time_in_status || "No label"}</span></td>
