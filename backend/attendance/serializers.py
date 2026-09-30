@@ -1,12 +1,15 @@
 from rest_framework import serializers
 
-from .models import AttendanceRecord, ShiftSetting
+from .models import AttendanceRecord, Employee
 
 
-class ShiftSettingSerializer(serializers.ModelSerializer):
+class EmployeeSerializer(serializers.ModelSerializer):
+    shift_configured = serializers.BooleanField(read_only=True)
+    username = serializers.CharField(source="user.username", read_only=True)
+
     class Meta:
-        model = ShiftSetting
-        fields = ["start", "end"]
+        model = Employee
+        fields = ["username", "name", "shift_start", "shift_end", "shift_configured"]
 
 
 class AttendanceRecordSerializer(serializers.ModelSerializer):

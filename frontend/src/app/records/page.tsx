@@ -3,33 +3,56 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import type { RecordsResponse } from "@/lib/types";
+import type { Profile, RecordsResponse, SessionResponse } from "@/lib/types";
 import {
-  API_URL,
   currentMonthKey,
   formatDate,
   formatMonth,
   formatShiftTime,
   formatTime,
   minutesToHours,
-  readError,
   shiftMonthKey,
   statusClass,
 } from "@/lib/format";
 import { Icon } from "@/components/icons";
+import { api, apiJson } from "@/lib/api";
 import { clearRecordsCache, readCache, recordsCacheKey, writeCache } from "@/lib/cache";
 
 function RecordsView() {
   const searchParams = useSearchParams();
   const [monthKey, setMonthKey] = useState(searchParams.get("month") ?? currentMonthKey());
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [hydrated, setHydrated] = useState(false);
   const [data, setData] = useState<RecordsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const loadRecords = useCallback(async (key: string, force = false) => {
+  const username = profile?.username ?? null;
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const payload = await apiJson<SessionResponse>("/auth/session/");
+        if (active && payload.authenticated && payload.profile) setProfile(payload.profile);
+      } catch {
+        if (active) setNotice("Unable to reach the attendance service.");
+      } finally {
+        if (active) {
+          setHydrated(true);
+          setLoading(false);
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const loadRecords = useCallback(async (user: string, key: string, force = false) => {
     if (!force) {
-      const cached = readCache<RecordsResponse>(recordsCacheKey(key));
+      const cached = readCache<RecordsResponse>(recordsCacheKey(user, key));
       if (cached) {
         setData(cached);
         setLoading(false);
@@ -39,10 +62,8 @@ function RecordsView() {
 
     setLoading(true);
     try {
-      const response = await fetch(`${API_URL}/records/?month=${key}`);
-      if (!response.ok) throw new Error(await readError(response));
-      const payload = (await response.json()) as RecordsResponse;
-      writeCache(recordsCacheKey(key), payload);
+      const payload = await apiJson<RecordsResponse>(`/records/?month=${key}`);
+      writeCache(recordsCacheKey(user, key), payload);
       setData(payload);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Unable to load attendance records.");
@@ -52,19 +73,21 @@ function RecordsView() {
   }, []);
 
   useEffect(() => {
-    loadRecords(monthKey);
-  }, [loadRecords, monthKey]);
+    if (username) loadRecords(username, monthKey);
+  }, [username, loadRecords, monthKey]);
 
   const handleRefresh = async () => {
+    if (!username) return;
     clearRecordsCache();
-    await loadRecords(monthKey, true);
+    await loadRecords(username, monthKey, true);
   };
 
   const handleExport = async () => {
+    if (!username) return;
     setExporting(true);
     try {
-      const response = await fetch(`${API_URL}/export/?month=${monthKey}`);
-      if (!response.ok) throw new Error(await readError(response));
+      const response = await api(`/export/?month=${monthKey}`);
+      if (!response.ok) throw new Error("Unable to export the attendance file.");
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -84,13 +107,22 @@ function RecordsView() {
 
   const records = data?.records ?? [];
 
+  if (hydrated && !username) {
+    return (
+      <div className="state-screen">
+        <p>Sign in on the dashboard to view your records.</p>
+        <Link href="/" className="primary-button">Go to dashboard</Link>
+      </div>
+    );
+  }
+
   return (
     <div className="tracker-shell">
       <header className="tracker-header">
         <div>
           <Link href="/" className="back-link">← Back to dashboard</Link>
           <h1>{formatMonth(monthKey)} records</h1>
-          <p className="header-sub">{records.length} {records.length === 1 ? "day" : "days"} recorded</p>
+          <p className="header-sub">{profile ? `${profile.name} — ` : ""}{records.length} {records.length === 1 ? "day" : "days"} recorded</p>
         </div>
         <div className="records-toolbar">
           <div className="calendar-nav">

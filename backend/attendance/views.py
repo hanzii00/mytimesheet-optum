@@ -7,11 +7,12 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import AttendanceRecord, ShiftSetting
-from .serializers import AttendanceRecordSerializer, ShiftSettingSerializer
+from .models import AttendanceRecord, Employee
+from .serializers import AttendanceRecordSerializer, EmployeeSerializer
 from .utils import compute_night_diff_minutes, compute_time_in_status
 
 
@@ -24,41 +25,80 @@ def parse_shift_time(value, field_name):
         raise ValueError(f"{field_name} must use HH:MM format.") from error
 
 
-def get_open_record():
-    """The session that has been timed in but not yet timed out, regardless of date."""
-    return AttendanceRecord.objects.filter(first_in__isnull=False, last_out__isnull=True).order_by("-date").first()
+def get_employee(request):
+    """The signed-in person's profile. Identity comes from the session, never the request body."""
+    employee = getattr(request.user, "employee", None)
+    if employee is None:
+        employee = Employee.objects.create(user=request.user, name=request.user.username)
+    return employee
+
+
+def get_open_record(employee):
+    """The session this person timed in to but has not timed out of, regardless of date."""
+    return (
+        employee.records.filter(first_in__isnull=False, last_out__isnull=True)
+        .order_by("-date")
+        .first()
+    )
+
+
+def filter_by_month(queryset, month):
+    """Return (queryset, error_response); exactly one of the two is set."""
+    if not month:
+        return queryset, None
+    try:
+        month_start = datetime.strptime(month, "%Y-%m").date()
+    except ValueError:
+        return None, Response(
+            {"detail": "Month must use YYYY-MM format."}, status=status.HTTP_400_BAD_REQUEST
+        )
+    return queryset.filter(date__year=month_start.year, date__month=month_start.month), None
 
 
 @api_view(["GET", "PUT"])
-def shift_setting(request):
-    setting = ShiftSetting.load()
+@permission_classes([IsAuthenticated])
+def profile(request):
+    """Read the signed-in person's profile, or save their shift."""
+    employee = get_employee(request)
+
     if request.method == "PUT":
+        name = (request.data.get("name") or "").strip()
         try:
             start = parse_shift_time(request.data.get("start"), "Shift start")
             end = parse_shift_time(request.data.get("end"), "Shift end")
-        except ValueError as error:
-            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
-        if not start or not end:
-            return Response({"detail": "Both start and end are required."}, status=status.HTTP_400_BAD_REQUEST)
-        setting.start = start
-        setting.end = end
-        setting.save()
-    return Response(ShiftSettingSerializer(setting).data)
+        except ValueError as parse_error:
+            return Response({"detail": str(parse_error)}, status=status.HTTP_400_BAD_REQUEST)
+
+        updated = []
+        if name:
+            employee.name = name[:64]
+            updated.append("name")
+        if start or end:
+            if not start or not end:
+                return Response(
+                    {"detail": "Both start and end are required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            employee.shift_start = start
+            employee.shift_end = end
+            updated += ["shift_start", "shift_end"]
+        if updated:
+            employee.save(update_fields=updated)
+
+    return Response(EmployeeSerializer(employee).data)
 
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def records(request):
-    queryset = AttendanceRecord.objects.all()
-    month = request.query_params.get("month")
-    if month:
-        try:
-            month_start = datetime.strptime(month, "%Y-%m").date()
-        except ValueError:
-            return Response({"detail": "Month must use YYYY-MM format."}, status=status.HTTP_400_BAD_REQUEST)
-        queryset = queryset.filter(date__year=month_start.year, date__month=month_start.month)
+    employee = get_employee(request)
+
+    queryset, error = filter_by_month(employee.records.all(), request.query_params.get("month"))
+    if error:
+        return error
 
     totals = queryset.aggregate(work_minutes=Sum("work_minutes"), night_diff_minutes=Sum("night_diff_minutes"))
-    open_record = get_open_record()
+    open_record = get_open_record(employee)
     return Response(
         {
             "records": AttendanceRecordSerializer(queryset, many=True).data,
@@ -72,7 +112,10 @@ def records(request):
 
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def clock_in(request):
+    employee = get_employee(request)
+
     work_location = request.data.get("work_location")
     if work_location not in AttendanceRecord.WorkLocation.values:
         return Response(
@@ -83,10 +126,10 @@ def clock_in(request):
     try:
         shift_start = parse_shift_time(request.data.get("shift_start"), "Shift start")
         shift_end = parse_shift_time(request.data.get("shift_end"), "Shift end")
-    except ValueError as error:
-        return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+    except ValueError as parse_error:
+        return Response({"detail": str(parse_error)}, status=status.HTTP_400_BAD_REQUEST)
 
-    open_record = get_open_record()
+    open_record = get_open_record(employee)
     if open_record:
         return Response(
             {
@@ -98,15 +141,19 @@ def clock_in(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    setting = ShiftSetting.load()
     if shift_start and shift_end:
         # Remember the shift the user clocked in with so it persists across devices.
-        setting.start = shift_start
-        setting.end = shift_end
-        setting.save()
+        employee.shift_start = shift_start
+        employee.shift_end = shift_end
+        employee.save(update_fields=["shift_start", "shift_end"])
     else:
-        shift_start = shift_start or setting.start
-        shift_end = shift_end or setting.end
+        shift_start = shift_start or employee.shift_start
+        shift_end = shift_end or employee.shift_end
+
+    if not shift_start or not shift_end:
+        return Response(
+            {"detail": "Set your shift before timing in."}, status=status.HTTP_400_BAD_REQUEST
+        )
 
     today = timezone.localdate()
     now = timezone.now()
@@ -117,7 +164,9 @@ def clock_in(request):
         "shift_end": shift_end,
         "time_in_status": compute_time_in_status(now, shift_start),
     }
-    record, created = AttendanceRecord.objects.get_or_create(date=today, defaults=defaults)
+    record, created = AttendanceRecord.objects.get_or_create(
+        employee=employee, date=today, defaults=defaults
+    )
     if not created:
         record.work_location = work_location
         record.first_in = now
@@ -132,10 +181,13 @@ def clock_in(request):
 
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def clock_out(request):
+    employee = get_employee(request)
+
     # Match the currently open session rather than strictly "today's" record,
     # so overnight shifts that cross midnight are closed out correctly.
-    record = get_open_record()
+    record = get_open_record(employee)
     if not record:
         return Response({"detail": "Time in before you can time out."}, status=status.HTTP_400_BAD_REQUEST)
     now = timezone.now()
@@ -148,15 +200,14 @@ def clock_out(request):
 
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def export_excel(request):
-    queryset = AttendanceRecord.objects.all()
+    employee = get_employee(request)
+
     month = request.query_params.get("month")
-    if month:
-        try:
-            month_start = datetime.strptime(month, "%Y-%m").date()
-        except ValueError:
-            return Response({"detail": "Month must use YYYY-MM format."}, status=status.HTTP_400_BAD_REQUEST)
-        queryset = queryset.filter(date__year=month_start.year, date__month=month_start.month)
+    queryset, error = filter_by_month(employee.records.all(), month)
+    if error:
+        return error
 
     workbook = Workbook()
     sheet = workbook.active
@@ -191,7 +242,7 @@ def export_excel(request):
         column_letter = get_column_letter(index)
         sheet.column_dimensions[column_letter].width = max(14, len(header) + 4)
 
-    filename = f"attendance_{month or 'all'}.xlsx"
+    filename = f"attendance_{employee.user.username}_{month or 'all'}.xlsx"
     response = HttpResponse(
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )

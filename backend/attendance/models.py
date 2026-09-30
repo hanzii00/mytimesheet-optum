@@ -1,25 +1,29 @@
-from datetime import time
-
+from django.conf import settings
 from django.db import models
 
+NAME_MAX_LENGTH = 64
 
-class ShiftSetting(models.Model):
-    """The user's saved shift, stored once so it survives browser/device changes."""
 
-    start = models.TimeField(default=time(9, 0))
-    end = models.TimeField(default=time(18, 0))
+class Employee(models.Model):
+    """Attendance profile for one signed-in account."""
 
-    @classmethod
-    def load(cls):
-        setting, _ = cls.objects.get_or_create(pk=1)
-        return setting
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="employee"
+    )
+    name = models.CharField(max_length=NAME_MAX_LENGTH)
+    shift_start = models.TimeField(null=True, blank=True)
+    shift_end = models.TimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
-    def save(self, *args, **kwargs):
-        self.pk = 1
-        super().save(*args, **kwargs)
+    class Meta:
+        ordering = ["name"]
+
+    @property
+    def shift_configured(self):
+        return self.shift_start is not None and self.shift_end is not None
 
     def __str__(self):
-        return f"Shift {self.start}-{self.end}"
+        return self.name
 
 
 class AttendanceRecord(models.Model):
@@ -29,7 +33,8 @@ class AttendanceRecord(models.Model):
         RTO = "RTO", "RTO"
         WFH = "WFH", "WFH"
 
-    date = models.DateField(unique=True)
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="records")
+    date = models.DateField()
     work_location = models.CharField(max_length=3, choices=WorkLocation.choices, blank=True)
     first_in = models.DateTimeField(null=True, blank=True)
     last_out = models.DateTimeField(null=True, blank=True)
@@ -41,6 +46,9 @@ class AttendanceRecord(models.Model):
 
     class Meta:
         ordering = ["-date"]
+        constraints = [
+            models.UniqueConstraint(fields=["employee", "date"], name="unique_attendance_per_employee_day"),
+        ]
 
     def __str__(self):
-        return f"Attendance {self.date}"
+        return f"Attendance {self.date} ({self.employee.name})"

@@ -2,27 +2,37 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import type { AttendanceRecord, RecordsResponse, ShiftSetting } from "@/lib/types";
+import type { AttendanceRecord, Profile, RecordsResponse, SessionResponse } from "@/lib/types";
 import {
-  API_URL,
   currentMonthKey,
   formatDate,
   formatMonth,
   formatShiftTime,
   formatTime,
   minutesToHours,
-  readError,
   shiftMonthKey,
   statusClass,
   todayKey,
 } from "@/lib/format";
+import { api, apiJson, postJson, putJson } from "@/lib/api";
 import { Calendar } from "./calendar";
 import { Icon } from "./icons";
-import { SHIFT_CACHE_KEY, clearRecordsCache, readCache, recordsCacheKey, writeCache } from "@/lib/cache";
-
-const USER_NAME_KEY = "attendance-portal:user-name";
+import { AuthGate, ShiftGate } from "./onboarding";
+import {
+  clearAllCache,
+  clearRecordsCache,
+  profileCacheKey,
+  readCache,
+  recordsCacheKey,
+  writeCache,
+} from "@/lib/cache";
 
 export default function AttendanceDashboard() {
+  const [hydrated, setHydrated] = useState(false);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState("");
+
   const [monthKey, setMonthKey] = useState(currentMonthKey());
   const [selectedDate, setSelectedDate] = useState<string | null>(todayKey());
   const [data, setData] = useState<RecordsResponse | null>(null);
@@ -31,86 +41,59 @@ export default function AttendanceDashboard() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState<"in" | "out" | null>(null);
   const [workLocation, setWorkLocation] = useState<"RTO" | "WFH" | "">("");
-  const [userName, setUserName] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState("");
-  const [shiftStart, setShiftStart] = useState("09:00");
-  const [shiftEnd, setShiftEnd] = useState("18:00");
   const [shiftDraftStart, setShiftDraftStart] = useState("09:00");
   const [shiftDraftEnd, setShiftDraftEnd] = useState("18:00");
   const [editingShift, setEditingShift] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  const shiftStart = profile?.shift_start?.slice(0, 5) ?? "";
+  const shiftEnd = profile?.shift_end?.slice(0, 5) ?? "";
+  const username = profile?.username ?? null;
+
+  // Seeds the CSRF cookie and tells us whether this browser already has a session.
   useEffect(() => {
-    const stored = window.localStorage.getItem(USER_NAME_KEY);
-    if (stored) {
-      setUserName(stored);
-    } else {
-      setEditingName(true);
-    }
-  }, []);
-
-  const loadShift = useCallback(async (force = false) => {
-    const applyShift = (start: string, end: string) => {
-      setShiftStart(start);
-      setShiftEnd(end);
-      setShiftDraftStart(start);
-      setShiftDraftEnd(end);
-    };
-
-    if (!force) {
-      const cached = readCache<ShiftSetting>(SHIFT_CACHE_KEY);
-      if (cached) {
-        applyShift(cached.start.slice(0, 5), cached.end.slice(0, 5));
-        return;
+    let active = true;
+    (async () => {
+      try {
+        const payload = await apiJson<SessionResponse>("/auth/session/");
+        if (!active) return;
+        if (payload.authenticated && payload.profile) {
+          setProfile(payload.profile);
+          writeCache(profileCacheKey(payload.profile.username), payload.profile);
+        }
+      } catch {
+        if (active) setProfileError("Unable to reach the attendance service.");
+      } finally {
+        if (active) setHydrated(true);
       }
-    }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
+  const loadProfile = useCallback(async (force = false) => {
+    setProfileError("");
     try {
-      const response = await fetch(`${API_URL}/shift/`);
-      if (!response.ok) return;
-      const setting = (await response.json()) as ShiftSetting;
-      writeCache(SHIFT_CACHE_KEY, setting);
-      applyShift(setting.start.slice(0, 5), setting.end.slice(0, 5));
-    } catch {
-      // Keep whatever defaults are showing if the service is unreachable.
+      const payload = await apiJson<Profile>("/profile/");
+      writeCache(profileCacheKey(payload.username), payload);
+      setProfile(payload);
+    } catch (err) {
+      if (!force) return;
+      setProfileError(
+        err instanceof Error ? err.message : "Unable to reach the attendance service.",
+      );
     }
   }, []);
 
   useEffect(() => {
-    loadShift();
-  }, [loadShift]);
+    if (shiftStart) setShiftDraftStart(shiftStart);
+    if (shiftEnd) setShiftDraftEnd(shiftEnd);
+  }, [shiftStart, shiftEnd]);
 
-  const saveName = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    window.localStorage.setItem(USER_NAME_KEY, trimmed);
-    setUserName(trimmed);
-    setEditingName(false);
-  };
-
-  const saveShift = async () => {
-    try {
-      const response = await fetch(`${API_URL}/shift/`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start: shiftDraftStart, end: shiftDraftEnd }),
-      });
-      if (!response.ok) throw new Error(await readError(response));
-      const setting = (await response.json()) as ShiftSetting;
-      writeCache(SHIFT_CACHE_KEY, setting);
-      setShiftStart(setting.start.slice(0, 5));
-      setShiftEnd(setting.end.slice(0, 5));
-      setEditingShift(false);
-      setNotice("Shift saved.");
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Unable to save the shift.");
-    }
-  };
-
-  const fetchRecords = useCallback(async (month: string, force = false) => {
+  const fetchRecords = useCallback(async (user: string, month: string, force = false) => {
     if (!force) {
-      const cached = readCache<RecordsResponse>(recordsCacheKey(month));
+      const cached = readCache<RecordsResponse>(recordsCacheKey(user, month));
       if (cached) {
         setData(cached);
         setError("");
@@ -121,10 +104,8 @@ export default function AttendanceDashboard() {
 
     setError("");
     try {
-      const response = await fetch(`${API_URL}/records/?month=${month}`);
-      if (!response.ok) throw new Error(await readError(response));
-      const payload = (await response.json()) as RecordsResponse;
-      writeCache(recordsCacheKey(month), payload);
+      const payload = await apiJson<RecordsResponse>(`/records/?month=${month}`);
+      writeCache(recordsCacheKey(user, month), payload);
       setData(payload);
     } catch (err) {
       setError(
@@ -137,9 +118,90 @@ export default function AttendanceDashboard() {
     }
   }, []);
 
+  const shiftConfigured = profile?.shift_configured ?? false;
+
   useEffect(() => {
-    fetchRecords(monthKey);
-  }, [fetchRecords, monthKey]);
+    if (username && shiftConfigured) fetchRecords(username, monthKey);
+  }, [username, shiftConfigured, monthKey, fetchRecords]);
+
+  const applySession = (payload: SessionResponse) => {
+    if (!payload.profile) return;
+    clearAllCache();
+    writeCache(profileCacheKey(payload.profile.username), payload.profile);
+    setProfile(payload.profile);
+    setData(null);
+    setLoading(true);
+  };
+
+  const signIn = async (user: string, password: string) => {
+    setProfileBusy(true);
+    setProfileError("");
+    try {
+      applySession(
+        await postJson<SessionResponse>("/auth/login/", { username: user.trim(), password }),
+      );
+    } catch (err) {
+      setProfileError(err instanceof Error ? err.message : "Unable to sign in.");
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  const register = async (user: string, password: string, name: string) => {
+    setProfileBusy(true);
+    setProfileError("");
+    try {
+      applySession(
+        await postJson<SessionResponse>("/auth/register/", {
+          username: user.trim(),
+          password,
+          name: name.trim(),
+        }),
+      );
+    } catch (err) {
+      setProfileError(err instanceof Error ? err.message : "Unable to create your account.");
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  const saveShift = async (start: string, end: string) => {
+    if (!username) return false;
+
+    setProfileBusy(true);
+    setProfileError("");
+    try {
+      const payload = await putJson<Profile>("/profile/", { start, end });
+      writeCache(profileCacheKey(payload.username), payload);
+      setProfile(payload);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to save the shift.";
+      setProfileError(message);
+      setNotice(message);
+      return false;
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    try {
+      await api("/auth/logout/", { method: "POST" });
+    } catch {
+      // Clear the local session regardless — the cookie may already be gone.
+    }
+    clearAllCache();
+    setProfile(null);
+    setProfileError("");
+    setData(null);
+    setWorkLocation("");
+    setEditingShift(false);
+    setNotice("");
+    setMonthKey(currentMonthKey());
+    setSelectedDate(todayKey());
+    setLoading(true);
+  };
 
   const openRecord: AttendanceRecord | null = data?.open_record ?? null;
 
@@ -162,21 +224,20 @@ export default function AttendanceDashboard() {
   }, []);
 
   const handleClock = async (action: "clock-in" | "clock-out") => {
+    if (!username) return;
+
     setBusy(action === "clock-in" ? "in" : "out");
     try {
-      const response = await fetch(`${API_URL}/${action}/`, {
-        method: "POST",
-        headers: action === "clock-in" ? { "Content-Type": "application/json" } : undefined,
-        body: action === "clock-in"
-          ? JSON.stringify({ shift_start: shiftStart, shift_end: shiftEnd, work_location: workLocation })
-          : undefined,
-      });
-      if (!response.ok) throw new Error(await readError(response));
-      const saved = (await response.json()) as AttendanceRecord;
+      const saved = await postJson<AttendanceRecord>(
+        `/${action}/`,
+        action === "clock-in"
+          ? { shift_start: shiftStart, shift_end: shiftEnd, work_location: workLocation }
+          : {},
+      );
       const savedMonth = saved.date.slice(0, 7);
       clearRecordsCache();
       if (savedMonth === monthKey) {
-        await fetchRecords(monthKey, true);
+        await fetchRecords(username, monthKey, true);
       } else {
         setMonthKey(savedMonth);
       }
@@ -190,11 +251,40 @@ export default function AttendanceDashboard() {
   };
 
   const handleRefresh = async () => {
+    if (!username) return;
     setRefreshing(true);
     clearRecordsCache();
-    await Promise.all([fetchRecords(monthKey, true), loadShift(true)]);
+    await Promise.all([fetchRecords(username, monthKey, true), loadProfile(true)]);
     setRefreshing(false);
   };
+
+  if (!hydrated) {
+    return <div className="state-screen"><p>Loading…</p></div>;
+  }
+
+  if (!profile) {
+    return (
+      <AuthGate
+        busy={profileBusy}
+        error={profileError}
+        onSignIn={signIn}
+        onRegister={register}
+        onModeChange={() => setProfileError("")}
+      />
+    );
+  }
+
+  if (!profile.shift_configured) {
+    return (
+      <ShiftGate
+        name={profile.name}
+        busy={profileBusy}
+        error={profileError}
+        onSubmit={(start, end) => { saveShift(start, end); }}
+        onSignOut={signOut}
+      />
+    );
+  }
 
   if (loading) {
     return <div className="state-screen"><p>Loading attendance…</p></div>;
@@ -204,7 +294,10 @@ export default function AttendanceDashboard() {
     return (
       <div className="state-screen">
         <p>{error || "No attendance data available."}</p>
-        <button className="primary-button" onClick={() => { setLoading(true); fetchRecords(monthKey, true); }}>Retry</button>
+        <div className="state-actions">
+          <button className="primary-button" onClick={() => { setLoading(true); fetchRecords(profile.username, monthKey, true); }}>Retry</button>
+          <button className="secondary-button" onClick={signOut}>Sign out</button>
+        </div>
       </div>
     );
   }
@@ -214,15 +307,8 @@ export default function AttendanceDashboard() {
       <header className="tracker-header">
         <div>
           <p className="eyebrow">MY ATTENDANCE</p>
-          <h1>{userName ? `Hello, ${userName}` : "Attendance record"}</h1>
-          {userName && !editingName && (
-            <button
-              className="name-edit-link"
-              onClick={() => { setNameDraft(userName); setEditingName(true); }}
-            >
-              Not you? Edit name
-            </button>
-          )}
+          <h1>Hello, {profile.name}</h1>
+          <button className="name-edit-link" onClick={signOut}>Signed in as {profile.username} — sign out</button>
         </div>
         <div className="header-aside">
           <div className="today"><span className="status-dot" />{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "short", day: "numeric" }).format(new Date())}</div>
@@ -231,31 +317,6 @@ export default function AttendanceDashboard() {
           </button>
         </div>
       </header>
-
-      {editingName && (
-        <form
-          className="name-form"
-          onSubmit={(event) => { event.preventDefault(); saveName(nameDraft); }}
-        >
-          <label htmlFor="user-name">What should we call you?</label>
-          <div className="name-form-row">
-            <input
-              id="user-name"
-              type="text"
-              autoFocus
-              placeholder="Your name"
-              value={nameDraft}
-              onChange={(event) => setNameDraft(event.target.value)}
-            />
-            <button type="submit" className="primary-button compact" disabled={!nameDraft.trim()}>Save</button>
-            {userName && (
-              <button type="button" className="secondary-button compact" onClick={() => setEditingName(false)}>
-                Cancel
-              </button>
-            )}
-          </div>
-        </form>
-      )}
 
       {notice && <button className="notice" onClick={() => setNotice("")}>{notice}<span>×</span></button>}
 
@@ -327,14 +388,24 @@ export default function AttendanceDashboard() {
           <div className="readout-item readout-shift">
             <span>Shift</span>
             <span className="shift-value">
-              <strong>{formatShiftTime(shiftStart)} – {formatShiftTime(shiftEnd)}</strong>
+              <strong>{formatShiftTime(shiftStart || null)} – {formatShiftTime(shiftEnd || null)}</strong>
               {!editingShift && <button className="link-button" onClick={() => setEditingShift(true)}>Edit</button>}
             </span>
           </div>
         </div>
 
         {editingShift && (
-          <form className="shift-form" onSubmit={(event) => { event.preventDefault(); saveShift(); }}>
+          <form
+            className="shift-form"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              const saved = await saveShift(shiftDraftStart, shiftDraftEnd);
+              if (saved) {
+                setEditingShift(false);
+                setNotice("Shift saved.");
+              }
+            }}
+          >
             <label>
               <span>Shift start</span>
               <input type="time" value={shiftDraftStart} onChange={(event) => setShiftDraftStart(event.target.value)} required />
@@ -344,7 +415,7 @@ export default function AttendanceDashboard() {
               <input type="time" value={shiftDraftEnd} onChange={(event) => setShiftDraftEnd(event.target.value)} required />
             </label>
             <div className="shift-form-actions">
-              <button type="submit" className="primary-button compact">Save shift</button>
+              <button type="submit" className="primary-button compact" disabled={profileBusy}>Save shift</button>
               <button
                 type="button"
                 className="secondary-button compact"

@@ -20,9 +20,17 @@ export type RecordsResponse = {
   };
 };
 
-export type ShiftSetting = {
-  start: string;
-  end: string;
+export type Profile = {
+  username: string;
+  name: string;
+  shift_start: string | null;
+  shift_end: string | null;
+  shift_configured: boolean;
+};
+
+export type SessionResponse = {
+  authenticated: boolean;
+  profile?: Profile;
 };
 
 export type CalendarDay = {

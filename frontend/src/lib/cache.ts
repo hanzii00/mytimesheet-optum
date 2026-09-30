@@ -42,7 +42,10 @@ export function clearCache(predicate: (key: string) => boolean) {
   }
 }
 
-export const recordsCacheKey = (month: string) => `records:${month}`;
-export const SHIFT_CACHE_KEY = "shift";
+export const recordsCacheKey = (username: string, month: string) => `records:${username}:${month}`;
+export const profileCacheKey = (username: string) => `profile:${username}`;
 
 export const clearRecordsCache = () => clearCache((key) => key.startsWith("records:"));
+
+/** Used on sign-out so the next person on this device never sees cached data. */
+export const clearAllCache = () => clearCache(() => true);
