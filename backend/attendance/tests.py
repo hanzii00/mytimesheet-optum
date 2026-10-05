@@ -29,7 +29,7 @@ class AttendanceApiTests(TestCase):
         self.client.force_authenticate(user=self.user)
 
     def clock_in(self, **payload):
-        body = {"work_location": "RTO"}
+        body = {"work_location": "RTO", "late_reason": "Test reason"}
         body.update(payload)
         return self.client.post(reverse("clock-in"), body)
 
@@ -95,10 +95,22 @@ class AttendanceApiTests(TestCase):
         late = timezone.make_aware(datetime.combine(today, time(9, 1)))
 
         with mock.patch("django.utils.timezone.now", return_value=late):
-            response = self.clock_in(shift_start="09:00")
+            response = self.clock_in(shift_start="09:00", late_reason="Traffic was heavier than expected.")
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["time_in_status"], "Late arrival")
+        self.assertEqual(response.data["late_reason"], "Traffic was heavier than expected.")
+
+    def test_clock_in_requires_reason_for_late_arrival(self):
+        today = timezone.localdate()
+        late = timezone.make_aware(datetime.combine(today, time(9, 1)))
+
+        with mock.patch("django.utils.timezone.now", return_value=late):
+            response = self.clock_in(shift_start="09:00", late_reason="")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["detail"], "Explain why you are late before timing in.")
+        self.assertEqual(AttendanceRecord.objects.count(), 0)
 
     def test_clock_in_rejects_invalid_shift_time(self):
         response = self.clock_in(shift_start="9am")
@@ -234,6 +246,7 @@ class AttendanceApiTests(TestCase):
                 "Time In",
                 "Time Out",
                 "Time In Label",
+                "Late Reason",
                 "Hours Worked",
                 "Night Diff Hours",
             ],
@@ -242,8 +255,9 @@ class AttendanceApiTests(TestCase):
         self.assertEqual(data_row[0], today.strftime("%Y-%m-%d"))
         self.assertEqual(data_row[1], "WFH")
         self.assertEqual(data_row[6], "Right on time")
-        self.assertEqual(data_row[7], 9.0)
-        self.assertEqual(data_row[8], 1.0)
+        self.assertIsNone(data_row[7])
+        self.assertEqual(data_row[8], 9.0)
+        self.assertEqual(data_row[9], 1.0)
 
 
 class AuthenticationRequiredTests(TestCase):
@@ -413,7 +427,10 @@ class MultiUserIsolationTests(TestCase):
 
     def clock_in(self, user, location="RTO"):
         self.client.force_authenticate(user=user)
-        return self.client.post(reverse("clock-in"), {"work_location": location})
+        return self.client.post(
+            reverse("clock-in"),
+            {"work_location": location, "late_reason": "Test reason"},
+        )
 
     def test_two_people_can_time_in_on_the_same_day(self):
         self.assertEqual(self.clock_in(self.hanz_user).status_code, 201)

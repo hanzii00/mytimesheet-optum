@@ -24,6 +24,7 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
             "shift_start",
             "shift_end",
             "time_in_status",
+            "late_reason",
             "work_minutes",
             "night_diff_minutes",
         ]

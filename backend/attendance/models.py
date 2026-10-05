@@ -41,6 +41,7 @@ class AttendanceRecord(models.Model):
     shift_start = models.TimeField(null=True, blank=True)
     shift_end = models.TimeField(null=True, blank=True)
     time_in_status = models.CharField(max_length=32, blank=True)
+    late_reason = models.CharField(max_length=500, blank=True)
     work_minutes = models.PositiveIntegerField(default=0)
     night_diff_minutes = models.PositiveIntegerField(default=0)
 

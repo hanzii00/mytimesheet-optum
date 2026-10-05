@@ -7,6 +7,7 @@ export type AttendanceRecord = {
   shift_start: string | null;
   shift_end: string | null;
   time_in_status: string;
+  late_reason: string;
   work_minutes: number;
   night_diff_minutes: number;
 };

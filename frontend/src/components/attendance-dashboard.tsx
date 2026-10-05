@@ -41,6 +41,8 @@ export default function AttendanceDashboard() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState<"in" | "out" | null>(null);
   const [workLocation, setWorkLocation] = useState<"RTO" | "WFH" | "">("");
+  const [lateReason, setLateReason] = useState("");
+  const [clockNow, setClockNow] = useState(() => new Date());
   const [shiftDraftStart, setShiftDraftStart] = useState("09:00");
   const [shiftDraftEnd, setShiftDraftEnd] = useState("18:00");
   const [editingShift, setEditingShift] = useState(false);
@@ -49,6 +51,10 @@ export default function AttendanceDashboard() {
   const shiftStart = profile?.shift_start?.slice(0, 5) ?? "";
   const shiftEnd = profile?.shift_end?.slice(0, 5) ?? "";
   const username = profile?.username ?? null;
+  const shiftStartMinutes = shiftStart
+    ? Number(shiftStart.slice(0, 2)) * 60 + Number(shiftStart.slice(3, 5))
+    : null;
+  const currentMinutes = clockNow.getHours() * 60 + clockNow.getMinutes();
 
   // Seeds the CSRF cookie and tells us whether this browser already has a session.
   useEffect(() => {
@@ -208,11 +214,25 @@ export default function AttendanceDashboard() {
   const activeRecord: AttendanceRecord | null =
     openRecord ?? data?.records.find((record) => record.date === todayKey()) ?? null;
 
+  const isLateNow =
+    !openRecord &&
+    !activeRecord?.first_in &&
+    shiftStartMinutes !== null &&
+    currentMinutes > shiftStartMinutes;
+
   useEffect(() => {
     if (activeRecord?.work_location) {
       setWorkLocation(activeRecord.work_location);
     }
-  }, [activeRecord?.work_location]);
+    if (activeRecord?.late_reason) {
+      setLateReason(activeRecord.late_reason);
+    }
+  }, [activeRecord?.late_reason, activeRecord?.work_location]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const selectedRecord: AttendanceRecord | null = selectedDate
     ? (data?.records.find((record) => record.date === selectedDate) ?? null)
@@ -231,7 +251,12 @@ export default function AttendanceDashboard() {
       const saved = await postJson<AttendanceRecord>(
         `/${action}/`,
         action === "clock-in"
-          ? { shift_start: shiftStart, shift_end: shiftEnd, work_location: workLocation }
+          ? {
+              shift_start: shiftStart,
+              shift_end: shiftEnd,
+              work_location: workLocation,
+              late_reason: lateReason.trim(),
+            }
           : {},
       );
       const savedMonth = saved.date.slice(0, 7);
@@ -338,7 +363,7 @@ export default function AttendanceDashboard() {
           <div className="time-clock-actions">
             <button
               className={openRecord ? "secondary-button" : "primary-button"}
-              disabled={busy !== null || Boolean(openRecord) || Boolean(activeRecord?.first_in) || !workLocation}
+              disabled={busy !== null || Boolean(openRecord) || Boolean(activeRecord?.first_in) || !workLocation || (isLateNow && !lateReason.trim())}
               onClick={() => handleClock("clock-in")}
             >
               <Icon name="clock" size={18} />Time In
@@ -351,6 +376,18 @@ export default function AttendanceDashboard() {
               <Icon name="clock" size={18} />Time Out
             </button>
           </div>
+          {isLateNow && (
+            <label className="late-reason-field">
+              <span>Reason for being late</span>
+              <textarea
+                value={lateReason}
+                onChange={(event) => setLateReason(event.target.value)}
+                maxLength={500}
+                placeholder="Please explain why you are late."
+                required
+              />
+            </label>
+          )}
         </div>
 
         <div className="hero-readout">
@@ -471,6 +508,7 @@ export default function AttendanceDashboard() {
                 <div><dt>Shift</dt><dd>{formatShiftTime(selectedRecord?.shift_start ?? null)} – {formatShiftTime(selectedRecord?.shift_end ?? null)}</dd></div>
                 <div><dt>Time in</dt><dd>{formatTime(selectedRecord?.first_in ?? null)}</dd></div>
                 <div><dt>Time in label</dt><dd><span className={statusClass(selectedRecord?.time_in_status)}>{selectedRecord?.time_in_status || "No label"}</span></dd></div>
+                {selectedRecord?.late_reason && <div><dt>Late reason</dt><dd>{selectedRecord.late_reason}</dd></div>}
                 <div><dt>Time out</dt><dd>{formatTime(selectedRecord?.last_out ?? null)}</dd></div>
                 <div><dt>Hours worked</dt><dd>{minutesToHours(selectedRecord?.work_minutes ?? 0)}</dd></div>
                 <div><dt>Night diff (10 PM–5 AM)</dt><dd>{minutesToHours(selectedRecord?.night_diff_minutes ?? 0)}</dd></div>

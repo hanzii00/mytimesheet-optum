@@ -171,7 +171,7 @@ function RecordsView() {
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>Date</th><th>Work location</th><th>Shift</th><th>Time In</th><th>Status</th><th>Time Out</th><th>Hours worked</th><th>Night diff</th></tr>
+                <tr><th>Date</th><th>Work location</th><th>Shift</th><th>Time In</th><th>Status</th><th>Late reason</th><th>Time Out</th><th>Hours worked</th><th>Night diff</th></tr>
               </thead>
               <tbody>
                 {records.map((record) => (
@@ -181,6 +181,7 @@ function RecordsView() {
                     <td>{formatShiftTime(record.shift_start)} – {formatShiftTime(record.shift_end)}</td>
                     <td>{formatTime(record.first_in)}</td>
                     <td><span className={statusClass(record.time_in_status)}>{record.time_in_status || "No label"}</span></td>
+                    <td>{record.late_reason || "—"}</td>
                     <td>{formatTime(record.last_out)}</td>
                     <td>{minutesToHours(record.work_minutes)}</td>
                     <td>{minutesToHours(record.night_diff_minutes)}</td>

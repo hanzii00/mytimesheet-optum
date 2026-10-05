@@ -157,12 +157,20 @@ def clock_in(request):
 
     today = timezone.localdate()
     now = timezone.now()
+    time_in_status = compute_time_in_status(now, shift_start)
+    late_reason = str(request.data.get("late_reason") or "").strip()
+    if time_in_status == "Late arrival" and not late_reason:
+        return Response(
+            {"detail": "Explain why you are late before timing in."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     defaults = {
         "work_location": work_location,
         "first_in": now,
         "shift_start": shift_start,
         "shift_end": shift_end,
-        "time_in_status": compute_time_in_status(now, shift_start),
+        "time_in_status": time_in_status,
+        "late_reason": late_reason if time_in_status == "Late arrival" else "",
     }
     record, created = AttendanceRecord.objects.get_or_create(
         employee=employee, date=today, defaults=defaults
@@ -172,8 +180,9 @@ def clock_in(request):
         record.first_in = now
         record.shift_start = shift_start
         record.shift_end = shift_end
-        record.time_in_status = compute_time_in_status(now, shift_start)
-        record.save(update_fields=["work_location", "first_in", "shift_start", "shift_end", "time_in_status"])
+        record.time_in_status = time_in_status
+        record.late_reason = late_reason if time_in_status == "Late arrival" else ""
+        record.save(update_fields=["work_location", "first_in", "shift_start", "shift_end", "time_in_status", "late_reason"])
     return Response(
         AttendanceRecordSerializer(record).data,
         status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
@@ -213,7 +222,7 @@ def export_excel(request):
     sheet = workbook.active
     sheet.title = "Attendance"
 
-    headers = ["Date", "Work Location", "Shift Start", "Shift End", "Time In", "Time Out", "Time In Label", "Hours Worked", "Night Diff Hours"]
+    headers = ["Date", "Work Location", "Shift Start", "Shift End", "Time In", "Time Out", "Time In Label", "Late Reason", "Hours Worked", "Night Diff Hours"]
     sheet.append(headers)
     for cell in sheet[1]:
         cell.font = Font(bold=True)
@@ -234,6 +243,7 @@ def export_excel(request):
             time_in,
             time_out,
             record.time_in_status,
+            record.late_reason,
             hours_worked,
             night_diff_hours,
         ])
