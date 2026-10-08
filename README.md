@@ -26,13 +26,14 @@ A minimal, multi-user attendance self-record tool built with Next.js and Django 
 .
 ├── backend/                 Django REST API
 │   ├── attendance/          AttendanceRecord model, API, Excel export, tests
-│   └── config/               Django configuration
+│   ├── config/               Django configuration
+│   └── .env.example          Backend env template
 ├── frontend/                Next.js application
-│   └── src/
-│       ├── app/              App Router and global styles
-│       ├── components/       Dashboard UI
-│       └── lib/               Types
-├── .env.example
+│   ├── src/
+│   │   ├── app/              App Router and global styles
+│   │   ├── components/       Dashboard UI
+│   │   └── lib/               Types
+│   └── .env.example          Frontend env template
 └── package.json              Root convenience scripts
 ```
 
@@ -40,19 +41,24 @@ A minimal, multi-user attendance self-record tool built with Next.js and Django 
 
 ### Configuration
 
-Both apps read their settings from gitignored env files. Create them from the template:
+Each app owns its own gitignored env file, created from the template that sits next to it:
 
 ```bash
-cp .env.example .env
+# Backend
+cp backend/.env.example backend/.env
 python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
-# paste the output as DJANGO_SECRET_KEY in .env
+# paste the output as DJANGO_SECRET_KEY in backend/.env
 
-printf 'NEXT_PUBLIC_API_URL=http://localhost:8000/api\n' > frontend/.env.local
+# Frontend
+cp frontend/.env.example frontend/.env.local
 ```
 
-Django loads `backend/.env` then the repo-root `.env`; real environment variables always take
-precedence, so hosts that inject config directly work unchanged. Every variable is documented in
-[`.env.example`](.env.example).
+Django loads `backend/.env`, then falls back to a repo-root `.env` if one exists; real environment
+variables always take precedence, so hosts that inject config directly work unchanged. Next.js reads
+`frontend/.env.local` in development and `frontend/.env.production` (or the host's build
+environment) for production builds. Every variable is documented in
+[`backend/.env.example`](backend/.env.example) and
+[`frontend/.env.example`](frontend/.env.example).
 
 ### Backend
 
@@ -65,6 +71,24 @@ npm run dev:backend
 
 The API runs at `http://localhost:8000/api/`. There is no seed/demo data — the attendance table
 starts empty and only fills in as you use the Time In / Time Out buttons.
+
+#### Database
+
+With `DATABASE_URL` unset the backend uses a local SQLite file, which keeps `npm test` offline and
+needs no setup. Point it at a managed Postgres to share one database across machines and deploys.
+
+For Supabase, copy the URI from **Project Settings > Database > Connection string** and prefer the
+**Connection pooling** (Session mode, port 5432) option:
+
+```bash
+DATABASE_URL=postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+```
+
+The direct `db.<project-ref>.supabase.co` host resolves to **IPv6 only**, so it fails on IPv4-only
+networks and on hosts without IPv6 egress. The pooler is reachable over IPv4. Either way, Postgres
+traffic on port 5432 is blocked by many corporate networks — if `migrate` hangs, run it from a
+different network or from your deployment host, and keep `DATABASE_URL` unset locally to fall back
+to SQLite.
 
 ### Frontend
 
@@ -117,7 +141,12 @@ python manage.py changepassword <username>
 
 ## Deployment
 
-Set these in your host's environment (or a production `.env`) — see [`.env.example`](.env.example):
+The two apps are deployed independently and each gets its own environment.
+
+### Backend
+
+Set these in your host's environment (or in `backend/.env`) — see
+[`backend/.env.example`](backend/.env.example):
 
 ```bash
 DJANGO_SECRET_KEY=<unique 50-char key, never reused from dev>
@@ -127,9 +156,25 @@ CORS_ALLOWED_ORIGINS=https://app.example.com
 CSRF_TRUSTED_ORIGINS=https://app.example.com
 CROSS_SITE_COOKIES=true        # only if the frontend is on a different domain
 TRUST_PROXY_SSL_HEADER=true    # behind an HTTPS-terminating proxy
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/postgres
 ```
 
-And for the frontend build: `NEXT_PUBLIC_API_URL=https://api.example.com/api`.
+`DATABASE_URL` is **required** when `DJANGO_DEBUG=false` — the app refuses to start on SQLite in
+production. Run migrations against it once before first boot:
+
+```bash
+DATABASE_URL=... .venv/bin/python backend/manage.py migrate
+```
+
+### Frontend
+
+Set this in your host's build environment (or in `frontend/.env.production`) — see
+[`frontend/.env.example`](frontend/.env.example). It is inlined at **build** time, so changing it
+requires a rebuild:
+
+```bash
+NEXT_PUBLIC_API_URL=https://api.example.com/api
+```
 
 With `DJANGO_DEBUG=false` the app refuses to start on the insecure fallback key and turns on SSL
 redirect, HSTS, `X-Frame-Options: DENY`, and secure cookies. Verify with:
@@ -138,9 +183,9 @@ redirect, HSTS, `X-Frame-Options: DENY`, and secure cookies. Verify with:
 cd backend && python manage.py check --deploy   # should report no issues
 ```
 
-Two things this setup does **not** solve: it still uses SQLite, which is weak under concurrent
-writes (move to PostgreSQL for more than a handful of users), and static files for the Django admin
-are unserved (add WhiteNoise or a CDN if you need the admin in production).
+Two things this setup does **not** solve: static files for the Django admin are unserved (add
+WhiteNoise or a CDN if you need the admin in production), and there is no automated backup of the
+database — configure that on your database host.
 
 ## Validation
 

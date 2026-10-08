@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 
+import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
@@ -98,12 +99,32 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# Set DATABASE_URL to use a managed Postgres (Supabase, RDS, …). Without it the
+# app falls back to a local SQLite file, which keeps `manage.py test` offline.
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+if DATABASE_URL:
+    DATABASES = {
+        "default": dj_database_url.parse(
+            DATABASE_URL,
+            # Reuse connections instead of dialling Postgres on every request.
+            conn_max_age=int(os.getenv("DB_CONN_MAX_AGE", "600")),
+            conn_health_checks=True,
+            ssl_require=env_flag("DB_SSL_REQUIRE", "true"),
+        )
     }
-}
+else:
+    if not DEBUG:
+        raise ImproperlyConfigured(
+            "DATABASE_URL must be set when DJANGO_DEBUG is false; "
+            "SQLite is not suitable for production."
+        )
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 
 # Password validation
